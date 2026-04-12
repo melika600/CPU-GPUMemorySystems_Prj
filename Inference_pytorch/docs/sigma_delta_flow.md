@@ -1,9 +1,5 @@
 # Sigma-delta (ΣΔ) stream interface in NeuroSim (`Inference_pytorch`)
 
-**NeuroSim extension notes (EAS-CiM 2.0–aligned)**
-
-
-
 ---
 
 ## Big picture
