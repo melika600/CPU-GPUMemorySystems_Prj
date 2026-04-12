@@ -1,25 +1,14 @@
----
-title: "Sigma-delta (ΣΔ) stream interface in NeuroSim (Inference_pytorch)"
-author: "NeuroSim extension notes (EAS-CiM 2.0–aligned)"
-date: "`r Sys.Date()`"
-output:
-  html_document:
-    toc: true
-    toc_depth: 3
-    number_sections: true
----
+# Sigma-delta (ΣΔ) stream interface in NeuroSim (`Inference_pytorch`)
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, comment = NA)
-```
+**NeuroSim extension notes (EAS-CiM 2.0–aligned)**
 
-**Note:** GitHub renders Markdown in the browser (like `README.md`) but shows `.Rmd` as raw source. For the same text as a **GitHub preview**, open [`README.md`](README.md) in this folder.
+This file is the canonical **Markdown** guide (same on disk and on GitHub; GitHub renders `.md` in the browser).
 
 This document explains how **first-order sigma–delta (ΣΔ) modulation** is modeled in the `Inference_pytorch/NeuroSIM` C++ path when the compute-in-memory (CiM) interface is set to **event-driven / stream-style readout**, following the spirit of **EAS-CiM 2.0** (Sreekumar *et al.*, ISCAS 2025): a **1-bit feedback stream** whose **duty cycle** and **effective pulse rate** encode an analog quantity (here, accumulated column current / MAC result) over an **observation window** \(T_o\).
 
 > **Scope:** This is a *PPA-oriented architectural model* in NeuroSim, not a SPICE netlist. Knobs (\(f_c\), \(T_o\), \(C_{\mathrm{int}}\), \(I_{\mathrm{ref}}\), ΣΔ supply \(V_{\mathrm{dd}}\)) calibrate area, latency, and energy against the paper’s ranges and your technology node.
 
-# 1. Where the mode is selected
+## 1. Where the mode is selected
 
 `Param::cimInterfaceMode` chooses the readout accounting path:
 
@@ -30,7 +19,7 @@ This document explains how **first-order sigma–delta (ΣΔ) modulation** is mo
 
 Row-side ΣΔ (word-line / activation encoding) is **modeled for timing** when the cell type is RRAM or FeFET; **separate area/energy accounting** for that row block is optional via `eascimRowSigmaDeltaSeparateAccounting`.
 
-# 2. Physical picture (first-order ΣΔ)
+## 2. Physical picture (first-order ΣΔ)
 
 A simplified first-order loop contains:
 
@@ -45,7 +34,7 @@ In NeuroSim, **`SigmaDeltaModulator`** (`SigmaDeltaModulator.h` / `.cpp`) encaps
 - **Roles:** `OUTPUT_ENCODER` (readout stream after array) vs `INPUT_ENCODER` (row / WL side, when instantiated as `sigmaDeltaModulatorRow`).
 - **Knobs:** `naturalFreqFc` (\(f_c\)), `observationPeriodTo` (\(T_o\)), `cIntFemtoFarad`, `iRefNanoAmp`, plus `eascimSigmaDeltaVdd` on `Param` for switching-energy scaling.
 
-# 3. Data flow through NeuroSim (high level)
+## 3. Data flow through NeuroSim (high level)
 
 ```
   models/*.py, modules/*.py, utee/hook.py
@@ -66,7 +55,7 @@ In NeuroSim, **`SigmaDeltaModulator`** (`SigmaDeltaModulator.h` / `.cpp`) encaps
 2. **`main`** reads `Param` (defaults in `Param.cpp`), builds tiles / subarrays, and runs latency–area–energy calculators.
 3. **`SubArray`** selects SAR vs ΣΔ via macros (`NS_USE_SIGMA_DELTA`, `NS_SUBARRAY_ADC_*`). In ΣΔ mode, **`sigmaDeltaModulator`** is sized, timed, and energized like other `FunctionUnit` peripherals.
 
-# 4. Latency model (what enters `readLatency`)
+## 4. Latency model (what enters `readLatency`)
 
 For the output ΣΔ block, after `Initialize`, **`CalculateLatency(numRead)`** sets:
 
@@ -78,7 +67,7 @@ That is **`observationPeriodTo * numRead`** (seconds in internal SI units), i.e.
 
 **Row-side** ΣΔ (`sigmaDeltaModulatorRow`) uses the same `CalculateLatency` pattern when the row modulator is present, so **`readLatency` on the subarray can include both** output and row contributions depending on the `NS_SUBROW_SDM_RL` macro path.
 
-# 5. `readLatency` vs `readLatencySync` (global clock proxy)
+## 5. `readLatency` vs `readLatencySync` (global clock proxy)
 
 NeuroSim derives a **chip-level synchronous clock period** from the **maximum** subarray `readLatency` seen along critical paths (`ProcessingUnit.cpp`). A long \(T_o\)-dominated ΣΔ observation time can therefore **inflate the global `clkPeriod`** and depress reported **FPS**, even if the physical array could be clocked faster in a fully asynchronous SoC.
 
@@ -91,14 +80,14 @@ To separate **“bit-serial ΣΔ observation time”** from **“array / digital
 
 Interpretation: use **`readLatency`** for **end-to-end read timing** where ΣΔ observation is on the critical path; use **`readLatencySync`** when you want **FPS / global clock** to ignore the output ΣΔ window (e.g. asynchronous periphery running on its own time base).
 
-# 6. Energy and area (short)
+## 6. Energy and area (short)
 
 - **Area:** transistor strip (scaled from 65 nm reference) + MiM bank \(\propto C_{\mathrm{int}}\) via `eascimAreaMimPerFfM2` and `eascimAreaOverheadFactor`.
 - **Dynamic energy (output path):** per-column contribution combines **switching on \(C_{\mathrm{int}}\)** (\(\propto\) pulse count \(\approx f_c T_o\)) and **bias / \(I_{\mathrm{ref}}\)** over \(T_o\), scaled by `eascimEnergySwitchFactor`, `eascimEnergyBiasFactor`, column resistance shaping, and temperature.
 
 See `SigmaDeltaModulator::GetReadPathEnergy` / `GetInputPathEnergy` for the exact expressions.
 
-# 7. Parameters to know (`Param`)
+## 7. Parameters to know (`Param`)
 
 | Field | Role |
 |-------|------|
@@ -110,24 +99,14 @@ See `SigmaDeltaModulator::GetReadPathEnergy` / `GetInputPathEnergy` for the exac
 | `eascimSigmaDeltaVdd` | Dedicated ΣΔ supply for energy (e.g. 0.4 V in 65 nm style studies). |
 | `eascimRowSigmaDeltaSeparateAccounting` | If `true`, count row ΣΔ area/energy as its own bucket; if `false`, row timing may still exist without separate PPA breakout. |
 
-# 8. Logs referenced in this work
+## 8. Logs referenced in this work
 
 Example artifacts (paths under `Inference_pytorch/`):
 
 - **`logrun/VGGcifar10Compare.log`** — side-by-side or comparative CIFAR-10 / VGG-style NeuroSim runs (baseline vs ΣΔ-oriented settings), useful for **Δ%** tables in R or a spreadsheet.
 - **`logrun2/cifar10_vgg8_sigmadelta_paperDefaults_Vdd0p4_rowModeledNotCounted_clkDecoupled.log`** — VGG8, paper-default ΣΔ knobs, \(V_{\mathrm{dd}}=0.4\) V for the ΣΔ block, row ΣΔ **modeled but not separately counted** in PPA, **`readLatencySync`** used for global clock (decoupled ΣΔ observation from `clkPeriod`).
 
-# 9. Rendering this document
-
-From R:
-
-```r
-rmarkdown::render("Inference_pytorch/docs/sigma_delta_flow.Rmd")
-```
-
-Requires packages `rmarkdown`, `knitr`, and a Pandoc installation (bundled with RStudio or install separately).
-
-# References
+## References
 
 - R. Sreekumar *et al.*, “EAS-CiM 2.0: Event-driven Asynchronous Stream-based Compute-in-Memory Kernels with Scalable Precision,” *IEEE ISCAS*, 2025.
 - Original NeuroSim: P.-Y. Chen, X. Peng, S. Yu, Arizona State University (see file headers in `NeuroSIM/`).
