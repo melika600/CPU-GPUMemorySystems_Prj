@@ -2,109 +2,170 @@
 
 **NeuroSim extension notes (EAS-CiM 2.0–aligned)**
 
-This document explains how **first-order sigma–delta (ΣΔ) modulation** is modeled in the `Inference_pytorch/NeuroSIM` C++ path when the compute-in-memory (CiM) interface is set to **event-driven / stream-style readout**, following the spirit of **EAS-CiM 2.0** (Sreekumar *et al.*, ISCAS 2025): a **1-bit feedback stream** whose **duty cycle** and **effective pulse rate** encode an analog quantity (here, accumulated column current / MAC result) over an **observation window** \(T_o\).
 
-**Scope:** This is a *PPA-oriented architectural model* in NeuroSim, not a SPICE netlist. Knobs (\(f_c\), \(T_o\), \(C_{\mathrm{int}}\), \(I_{\mathrm{ref}}\), ΣΔ supply \(V_{\mathrm{dd}}\)) calibrate area, latency, and energy against the paper’s ranges and your technology node.
+
+---
+
+## Big picture
+
+In a normal **analog-to-digital** path you might sample a voltage once with a multi-bit **SAR ADC**. In the **ΣΔ stream** view used here, the array still produces an analog result (for example **column current** after a multiply–accumulate along a bit line), but the **readout interface** is treated like a **1-bit stream over time**: the hardware keeps integrating, comparing, and feeding back until the **average** of that fast 1-bit stream represents the value you care about.
+
+Three plain steps:
+
+1. **Integrate** — Charge builds on an **integration capacitor** (**C_int**, in femtofarads). The net current into that node (input minus feedback) moves the voltage on **C_int**.
+2. **Decide** — A **comparator** (in the paper, a hysteresis inverter) flips when the integrator crosses a band. That decision is your **1-bit output** for a slice of time.
+3. **Feedback** — A **reference current** (**I_ref**, in nanoamps) is switched on or off so the integrator is **pushed back** toward balance. That closing of the loop is what makes the **average duty cycle** of the bit stream track the input.
+
+You do not get a multi-bit code in one shot. You get **accuracy from time**: if you watch the stream for a longer **observation window** (**T_o**, in seconds), the **average** of the bits is a better estimate of the analog value. If the internal oscillator runs faster (**f_c**, in Hz), you can get **more transitions inside the same T_o**, which usually improves effective resolution but costs **more switching energy** on **C_int**.
+
+**Important:** NeuroSim is **not** running SPICE. It is a **PPA** (power, performance, area) **architectural** model: the code uses **C_int**, **I_ref**, **T_o**, **f_c**, and the ΣΔ supply **V_dd** to produce **reasonable latency, energy, and area** that you can compare across designs and technology knobs.
+
+---
 
 ## 1. Where the mode is selected
 
-`Param::cimInterfaceMode` chooses the readout accounting path:
+Everything starts in **`Param`**.
 
-| Mode | Meaning |
-|------|---------|
-| `BASELINE_ADC` | Classic NeuroSim path: SAR-ADC or MLSA, depending on existing `SARADC` / MLSA flags. |
-| `SIGMA_DELTA_STREAM` | ΣΔ **output encoder** (column / sense-line side) replaces SAR latency/energy/area hooks in the subarray macros. |
+`Param::cimInterfaceMode` picks which readout story the subarray uses:
 
-Row-side ΣΔ (word-line / activation encoding) is **modeled for timing** when the cell type is RRAM or FeFET; **separate area/energy accounting** for that row block is optional via `eascimRowSigmaDeltaSeparateAccounting`.
+| Mode | What it means |
+|------|----------------|
+| `BASELINE_ADC` | **Classic NeuroSim.** Use the usual SAR / MLSA style paths controlled by the existing SAR and MLSA flags. |
+| `SIGMA_DELTA_STREAM` | **ΣΔ stream interface.** On the **column / sense side**, the simulator uses the **ΣΔ output encoder** (`sigmaDeltaModulator`) for the same “slot” where SAR latency, energy, and area used to plug in (via shared macros in `SubArray.cpp`). |
 
-## 2. Physical picture (first-order ΣΔ)
+**Row side vs column side — stated simply:**
 
-A simplified first-order loop contains:
+- **Column (output) ΣΔ** — Models the **readout stream** after the array. This is always part of the ΣΔ story when `SIGMA_DELTA_STREAM` is on.
+- **Row (input / WL) ΣΔ** — For **RRAM** and **FeFET** cell types, the code can also model a **row-side** modulator (`sigmaDeltaModulatorRow`) for **timing**. Whether its **area and energy** are **booked as a separate block** is controlled by **`eascimRowSigmaDeltaSeparateAccounting`**: if `false`, you still may get **timing** from the row modulator, but you do **not** split out its area/energy as its own line item (similar in spirit to not breaking out every input DAC detail in baseline flows).
 
-1. **Integrator** on capacitor \(C_{\mathrm{int}}\) driven by the **difference** between input current (proportional to the quantity to encode) and **feedback** current switched according to the 1-bit quantizer output.
-2. **Comparator / hysteresis stage** (in the paper: DLS inverter) deciding when the integrator has crossed a threshold band.
-3. **1-bit DAC / feedback** that injects \(\pm I_{\mathrm{ref}}\) (or equivalent) back onto \(C_{\mathrm{int}}\).
+---
 
-Over a finite **observation window** \(T_o\), the **average duty cycle** \(\delta\) of the output bit stream relates to the normalized input (paper Eqs. (1)–(2) in the EAS-CiM 2.0 manuscript). A higher **natural clocking rate** \(f_c\) (internal ring-oscillator / DLS activity) allows more **edges per \(T_o\)**, improving **effective resolution** at the cost of **dynamic energy** (more switching on \(C_{\mathrm{int}}\)).
+## 2. The six knobs (names in code vs meaning on paper)
 
-In NeuroSim, **`SigmaDeltaModulator`** (`SigmaDeltaModulator.h` / `.cpp`) encapsulates:
+These names appear in **`Param`** and in **`SigmaDeltaModulator::Initialize`**.
 
-- **Roles:** `OUTPUT_ENCODER` (readout stream after array) vs `INPUT_ENCODER` (row / WL side, when instantiated as `sigmaDeltaModulatorRow`).
-- **Knobs:** `naturalFreqFc` (\(f_c\)), `observationPeriodTo` (\(T_o\)), `cIntFemtoFarad`, `iRefNanoAmp`, plus `eascimSigmaDeltaVdd` on `Param` for switching-energy scaling.
+| In code (`Param` / modulator) | Symbol (paper / intuition) | Units | What it does in simple words |
+|-------------------------------|-----------------------------|-------|-------------------------------|
+| `eascimObservationPeriodTo` | **T_o** | seconds | **How long you “watch” the stream”** to form one digital observation. **Longer T_o** → usually **better effective precision**, **more latency** per read in the model. |
+| `eascimNaturalFreqFc` | **f_c** | Hz | **How fast the modulator can toggle internally** when it is active. **Higher f_c** → **more pulses inside the same T_o** → tends to **better resolution** and **higher dynamic energy** (more charging/discharging of **C_int**). |
+| `eascimCintFemtoFarad` | **C_int** | fF (femtofarads) | **Integration capacitor bank** size. **Larger C_int** → same charge change produces **smaller voltage step** → often **finer** quantization of the integrator node, but **more charge** moved per switch → affects **energy** and **MiM area** in the model. |
+| `eascimIrefNanoAmp` | **I_ref** | nA (nanoamps) | **Strength of the feedback reference current.** Sets how aggressively the loop pushes the integrator back; scales **bias-related energy** over **T_o** in the energy model. |
+| `eascimSigmaDeltaVdd` | **V_dd** (ΣΔ block) | volts | **Supply voltage used for ΣΔ switching-energy math** (for example **0.4 V** in a low-voltage analog style). It is **not** automatically every other block’s Vdd; it is the **analog ΣΔ periphery** supply you assign for energy. |
+| `eascimRowSigmaDeltaSeparateAccounting` | (no single symbol) | bool | **`true`** — count **row ΣΔ** area/energy as its **own** bucket. **`false`** — **do not** split row ΣΔ area/energy out; **timing** for row ΣΔ may still apply where the code path includes it. |
 
-## 3. Data flow through NeuroSim (high level)
+**Clamp in code:** **`C_int`** and **`I_ref`** are **clamped** to the paper’s reported ranges inside **`SigmaDeltaModulator::Initialize`** so stray config values do not blow up the model.
+
+**Roles inside the C++ class:**
+
+- **`OUTPUT_ENCODER`** — Column / readout side (`sigmaDeltaModulator`).
+- **`INPUT_ENCODER`** — Row / word-line side (`sigmaDeltaModulatorRow`) when that path is built.
+
+---
+
+## 3. How data moves through this repo (Python → CSV → C++)
 
 ```
   models/*.py, modules/*.py, utee/hook.py
               |
               v
-     layer_record_*  (CSV weights / activations)
+     layer_record_*  (CSV: weights and activations per layer)
               |
               v
-     NeuroSIM main.cpp + Param
+     NeuroSIM: main.cpp reads Param, builds hierarchy
               |
               v
           SubArray  ------>  sigmaDeltaModulator (OUTPUT_ENCODER)
               |
-              +--(RRAM/FeFET)-->  sigmaDeltaModulatorRow (INPUT_ENCODER), timing optional in PPA
+              +-- (RRAM / FeFET) -->  sigmaDeltaModulatorRow (INPUT_ENCODER)
+                                       timing optional in PPA (see flag above)
 ```
 
-1. **PyTorch inference** exports per-layer tensors to CSV under `layer_record_*` (weights, activations).
-2. **`main`** reads `Param` (defaults in `Param.cpp`), builds tiles / subarrays, and runs latency–area–energy calculators.
-3. **`SubArray`** selects SAR vs ΣΔ via macros (`NS_USE_SIGMA_DELTA`, `NS_SUBARRAY_ADC_*`). In ΣΔ mode, **`sigmaDeltaModulator`** is sized, timed, and energized like other `FunctionUnit` peripherals.
+1. **Python** runs the network and **hooks** export tensors to **CSV** files under folders like `layer_record_VGG8/`.
+2. **`main`** (C++) reads **`Param`** (defaults in **`Param.cpp`**), reads the layer traces, and runs **latency, area, and energy** calculators for tiles and subarrays.
+3. **`SubArray`** chooses SAR vs ΣΔ using macros such as **`NS_USE_SIGMA_DELTA`**. In ΣΔ mode, **`sigmaDeltaModulator`** is a normal **`FunctionUnit`**: it gets **`Initialize`**, **`CalculateLatency`**, **`CalculatePower`**, **`CalculateArea`**, just like other blocks.
 
-## 4. Latency model (what enters `readLatency`)
+---
 
-For the output ΣΔ block, after `Initialize`, **`CalculateLatency(numRead)`** sets:
+## 4. Latency: what the simulator actually adds
 
-\[
-\tau_{\Sigma\Delta,\mathrm{out}} \;=\; T_o \times \texttt{numRead}
-\]
+For the **output** ΣΔ block, **`SigmaDeltaModulator::CalculateLatency(numRead)`** does one simple thing:
 
-That is **`observationPeriodTo * numRead`** (seconds in internal SI units), i.e. **one full observation window per counted read operation** in the NeuroSim accounting path. There is **no extra explicit “settle” term** folded into this line in the current implementation; any settling behavior is implicitly folded into how you set \(T_o\) and \(f_c\) for your study.
+**ΣΔ output latency = T_o × numRead**
 
-**Row-side** ΣΔ (`sigmaDeltaModulatorRow`) uses the same `CalculateLatency` pattern when the row modulator is present, so **`readLatency` on the subarray can include both** output and row contributions depending on the `NS_SUBROW_SDM_RL` macro path.
+In code that is:
 
-## 5. `readLatency` vs `readLatencySync` (global clock proxy)
+**`readLatency` (for that block) += `observationPeriodTo` * `numRead`**
 
-NeuroSim derives a **chip-level synchronous clock period** from the **maximum** subarray `readLatency` seen along critical paths (`ProcessingUnit.cpp`). A long \(T_o\)-dominated ΣΔ observation time can therefore **inflate the global `clkPeriod`** and depress reported **FPS**, even if the physical array could be clocked faster in a fully asynchronous SoC.
+So:
 
-To separate **“bit-serial ΣΔ observation time”** from **“array / digital synchronous cycle”** for exploration, `SubArray` exposes **`readLatencySync`**:
+- **`numRead`** is how NeuroSim counts read operations in that path.
+- Every counted read pays **one full observation window** **T_o** in the model.
 
-- **`readLatency`:** full modeled read path latency (includes output ΣΔ \(T_o \cdot \texttt{numRead}\), and row ΣΔ timing when modeled).
-- **`readLatencySync`:** same as `readLatency`, then **minus output ΣΔ `sigmaDeltaModulator.readLatency` only** when `SIGMA_DELTA_STREAM` is active (row ΣΔ is **not** subtracted here).
+There is **no separate “settle” term** added in that function today. If you need settling to be explicit, you fold it into your choice of **T_o** / **f_c** / experiment setup rather than a second line in that formula.
 
-**`ProcessingUnit`** uses **`readLatencySync`** when updating `clkPeriod`, so the **global clock / FPS** reflects a **decoupled** (synchronous-equivalent) view while **energy and detailed read latency** can still include ΣΔ.
+**Row ΣΔ:** When the row modulator is present, it uses the **same latency pattern**. The **subarray’s total `readLatency`** can therefore include **both** output and row pieces, depending on the **`NS_SUBROW_SDM_RL`** path in **`SubArray.cpp`**.
 
-Interpretation: use **`readLatency`** for **end-to-end read timing** where ΣΔ observation is on the critical path; use **`readLatencySync`** when you want **FPS / global clock** to ignore the output ΣΔ window (e.g. asynchronous periphery running on its own time base).
+---
 
-## 6. Energy and area (short)
+## 5. `readLatency` vs `readLatencySync` (why two numbers?)
 
-- **Area:** transistor strip (scaled from 65 nm reference) + MiM bank \(\propto C_{\mathrm{int}}\) via `eascimAreaMimPerFfM2` and `eascimAreaOverheadFactor`.
-- **Dynamic energy (output path):** per-column contribution combines **switching on \(C_{\mathrm{int}}\)** (\(\propto\) pulse count \(\approx f_c T_o\)) and **bias / \(I_{\mathrm{ref}}\)** over \(T_o\), scaled by `eascimEnergySwitchFactor`, `eascimEnergyBiasFactor`, column resistance shaping, and temperature.
+**Problem in one sentence:** If you put the **full** ΣΔ observation time **T_o × numRead** into the same bucket that sets the **global chip clock**, a long **T_o** makes the whole design look **artificially slow** (low FPS), even when you want to explore an **asynchronous** ΣΔ periphery that does **not** force the whole digital chip to run that slowly.
 
-See `SigmaDeltaModulator::GetReadPathEnergy` / `GetInputPathEnergy` for the exact expressions.
+**What NeuroSim does:**
 
-## 7. Parameters to know (`Param`)
+| Variable | Meaning |
+|----------|---------|
+| **`readLatency`** | **Full** modeled read path time, including **output ΣΔ** observation time and **row ΣΔ** timing when that path is active. Use this when you care about **true end-to-end read time** with ΣΔ on the critical path. |
+| **`readLatencySync`** | Starts from **`readLatency`**, then **subtracts only the output ΣΔ block’s** **`sigmaDeltaModulator.readLatency`** when **`SIGMA_DELTA_STREAM`** is on. **Row ΣΔ is not subtracted** here. |
 
-| Field | Role |
-|-------|------|
-| `cimInterfaceMode` | `BASELINE_ADC` vs `SIGMA_DELTA_STREAM`. |
-| `eascimNaturalFreqFc` | \(f_c\) [Hz]. |
-| `eascimObservationPeriodTo` | \(T_o\) [s]. |
-| `eascimCintFemtoFarad` | \(C_{\mathrm{int}}\) [fF], clamped to paper range in `SigmaDeltaModulator::Initialize`. |
-| `eascimIrefNanoAmp` | \(I_{\mathrm{ref}}\) [nA], clamped similarly. |
-| `eascimSigmaDeltaVdd` | Dedicated ΣΔ supply for energy (e.g. 0.4 V in 65 nm style studies). |
-| `eascimRowSigmaDeltaSeparateAccounting` | If `true`, count row ΣΔ area/energy as its own bucket; if `false`, row timing may still exist without separate PPA breakout. |
+**`ProcessingUnit.cpp`** uses **`readLatencySync`** when it updates **`clkPeriod`**. So:
 
-## 8. Logs referenced in this work
+- **FPS / global clock** track a **“synchronous-style”** view that **does not stretch** with the **output** ΣΔ window.
+- **Energy** and the **full** **`readLatency`** path can still **include** ΣΔ so you do not lose physical cost in the model.
 
-Example artifacts (paths under `Inference_pytorch/`):
+**Rule of thumb:**
 
-- **`logrun/VGGcifar10Compare.log`** — side-by-side or comparative CIFAR-10 / VGG-style NeuroSim runs (baseline vs ΣΔ-oriented settings), useful for **Δ%** tables in R or a spreadsheet.
-- **`logrun2/cifar10_vgg8_sigmadelta_paperDefaults_Vdd0p4_rowModeledNotCounted_clkDecoupled.log`** — VGG8, paper-default ΣΔ knobs, \(V_{\mathrm{dd}}=0.4\) V for the ΣΔ block, row ΣΔ **modeled but not separately counted** in PPA, **`readLatencySync`** used for global clock (decoupled ΣΔ observation from `clkPeriod`).
+- Ask “how long does a read take **including** watching the ΣΔ stream?” → look at **`readLatency`**.
+- Ask “how fast does the **rest of the chip** tick in this experiment?” → look at **`clkPeriod` / FPS** derived from **`readLatencySync`**.
+
+---
+
+## 6. Energy and area 
+
+- **Area** — A **transistor budget** (scaled from a **65 nm** style reference in the code comments) plus a **metal–insulator–metal (MiM)** capacitor area that **grows with C_int**, using **`eascimAreaMimPerFfM2`** and **`eascimAreaOverheadFactor`**.
+- **Dynamic energy (output path)** — For each column, the model adds:
+  - **Switching energy** on **C_int** that scales with roughly **how many effective pulses** you get in a window (the code ties this to **f_c × T_o** through **`GetPulseCountInObservationWindow`**), scaled by **`eascimEnergySwitchFactor`**, and using **V_dd** for the **0.5·C·V²** style term.
+  - **Bias energy** over **T_o** using **I_ref** and **V_dd**, scaled by **`eascimEnergyBiasFactor`**.
+  - Extra **column-resistance** and **temperature** shaping as implemented in **`GetReadPathEnergy`**.
+
+For the exact formulas, open **`SigmaDeltaModulator.cpp`** — functions **`GetReadPathEnergy`** and **`GetInputPathEnergy`**.
+
+---
+
+## 7. Quick parameter checklist (`Param`)
+
+| Field | Plain words |
+|-------|-------------|
+| `cimInterfaceMode` | **`BASELINE_ADC`** = classic SAR/MLSA style. **`SIGMA_DELTA_STREAM`** = use ΣΔ accounting on the column side. |
+| `eascimNaturalFreqFc` | Internal **f_c** [Hz]. |
+| `eascimObservationPeriodTo` | **T_o** [s]. |
+| `eascimCintFemtoFarad` | **C_int** [fF], clamped in **`Initialize`**. |
+| `eascimIrefNanoAmp` | **I_ref** [nA], clamped in **`Initialize`**. |
+| `eascimSigmaDeltaVdd` | **V_dd** for the ΣΔ block in **energy** math (example: **0.4** V). |
+| `eascimRowSigmaDeltaSeparateAccounting` | Split **row ΣΔ** **area/energy** out (`true`) or keep it merged (`false`). |
+
+---
+
+## 8. Example logs shipped with this tree
+
+Under **`Inference_pytorch/`**:
+
+- **`logrun/VGGcifar10Compare.log`** — Compare-style CIFAR-10 / VGG NeuroSim runs (good for **before/after** or **delta percent** tables).
+- **`logrun2/cifar10_vgg8_sigmadelta_paperDefaults_Vdd0p4_rowModeledNotCounted_clkDecoupled.log`** — VGG8 with **paper-style defaults**, **V_dd = 0.4 V** for ΣΔ energy, **row ΣΔ modeled but not separately counted** in PPA, and **clock derived from `readLatencySync`** (ΣΔ observation **decoupled** from **`clkPeriod`**).
+
+---
 
 ## References
 
 - R. Sreekumar *et al.*, “EAS-CiM 2.0: Event-driven Asynchronous Stream-based Compute-in-Memory Kernels with Scalable Precision,” *IEEE ISCAS*, 2025.
-- Original NeuroSim: P.-Y. Chen, X. Peng, S. Yu, Arizona State University (see file headers in `NeuroSIM/`).
+- NeuroSim: P.-Y. Chen, X. Peng, S. Yu, Arizona State University (see headers under **`NeuroSIM/`**).
