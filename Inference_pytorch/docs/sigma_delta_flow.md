@@ -4,7 +4,7 @@
 
 This document explains how **first-order sigma–delta (ΣΔ) modulation** is modeled in the `Inference_pytorch/NeuroSIM` C++ path when the compute-in-memory (CiM) interface is set to **event-driven / stream-style readout**, following the spirit of **EAS-CiM 2.0** (Sreekumar *et al.*, ISCAS 2025): a **1-bit feedback stream** whose **duty cycle** and **effective pulse rate** encode an analog quantity (here, accumulated column current / MAC result) over an **observation window** \(T_o\).
 
-> **Scope:** This is a *PPA-oriented architectural model* in NeuroSim, not a SPICE netlist. Knobs (\(f_c\), \(T_o\), \(C_{\mathrm{int}}\), \(I_{\mathrm{ref}}\), ΣΔ supply \(V_{\mathrm{dd}}\)) calibrate area, latency, and energy against the paper’s ranges and your technology node.
+**Scope:** This is a *PPA-oriented architectural model* in NeuroSim, not a SPICE netlist. Knobs (\(f_c\), \(T_o\), \(C_{\mathrm{int}}\), \(I_{\mathrm{ref}}\), ΣΔ supply \(V_{\mathrm{dd}}\)) calibrate area, latency, and energy against the paper’s ranges and your technology node.
 
 ## 1. Where the mode is selected
 
