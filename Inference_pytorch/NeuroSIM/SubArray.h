@@ -65,6 +65,7 @@
 #include "MultilevelSenseAmp.h"
 #include "MultilevelSAEncoder.h"
 #include "SarADC.h"
+#include "SigmaDeltaModulator.h"
 #include "LevelShifter.h"
 
 using namespace std;
@@ -159,6 +160,9 @@ public:
 	bool relaxArrayCellWidth;	// true: relax the memory cell width to match the width of periperal circuit unit that connects to the column (ex: pass gate width in the column mux) if the latter is larger
 
 	double areaADC, areaAccum, areaOther, readLatencyADC, readLatencyAccum, readLatencyOther, readDynamicEnergyADC, readDynamicEnergyAccum, readDynamicEnergyOther;
+	/* Synchronous-equivalent read latency used only for deriving global clkPeriod.
+	 * In ΣΔ stream mode, this excludes the ΣΔ observation/service window(s). */
+	double readLatencySync;
 	
 	bool trainingEstimation, parallelTrans;
 	int levelOutputTrans, numRowMuxedTrans, numReadPulseTrans;
@@ -198,6 +202,9 @@ public:
 	MultilevelSenseAmp       multilevelSenseAmp;
 	MultilevelSAEncoder      multilevelSAEncoder;
 	SarADC                   sarADC;
+	SigmaDeltaModulator      sigmaDeltaModulator;
+	/* EAS-CiM: second ΣΔ bank on the row (WL / analog input) side; column instance stays on read path. */
+	SigmaDeltaModulator      sigmaDeltaModulatorRow;
 };
 
 #endif /* SUBARRAY_H_ */

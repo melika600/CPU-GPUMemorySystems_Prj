@@ -149,6 +149,23 @@ int main(int argc, char * argv[]) {
     param->numColMuxed = param->numColPerSynapse;
     }
 
+    cout << "---------------- CiM interface (Param.cpp) ----------------" << endl;
+    cout << "cimInterfaceMode: " << static_cast<int>(param->cimInterfaceMode)
+         << " (0=BASELINE_ADC, 1=SIGMA_DELTA_STREAM)" << endl;
+    cout << "SARADC (baseline SAR vs MLSA): " << (param->SARADC ? "true" : "false") << endl;
+    if (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM) {
+        cout << "Sigma-delta: f_c = " << param->eascimNaturalFreqFc << " Hz, T_o = "
+             << param->eascimObservationPeriodTo << " s" << endl;
+        cout << "Sigma-delta: C_int = " << param->eascimCintFemtoFarad << " fF, I_ref = "
+             << param->eascimIrefNanoAmp << " nA" << endl;
+        cout << "Sigma-delta: Vdd = " << param->eascimSigmaDeltaVdd << " V" << endl;
+        cout << "Sigma-delta: rowSigmaDeltaSeparateAccounting = "
+             << (param->eascimRowSigmaDeltaSeparateAccounting ? "true" : "false") << endl;
+        cout << "Sigma-delta: settleCycles = " << param->eascimSettleCycles << endl;
+    }
+    cout << "-------------------------------------------------------------" << endl;
+    cout << endl;
+
     double maxPESizeNM, maxTileSizeCM, numPENM;
     vector<int> markNM;
     vector<int> pipelineSpeedUp;

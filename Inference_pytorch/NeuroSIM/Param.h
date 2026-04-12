@@ -43,6 +43,15 @@ class Param {
 public:
 	Param();
 
+	/* Compute-in-memory interface selector:
+	 * - BASELINE_ADC: use NeuroSim baseline readout selection (SARADC vs MLSA).
+	 * - SIGMA_DELTA_STREAM: enable EAS-CiM-style ΣΔ stream interface accounting.
+	 */
+	enum class CiMInterfaceMode {
+		BASELINE_ADC = 0,
+		SIGMA_DELTA_STREAM = 1
+	};
+
 	int operationmode, operationmodeBack, memcelltype, accesstype, transistortype, deviceroadmap;      		
 	
 	double heightInFeatureSizeSRAM, widthInFeatureSizeSRAM, widthSRAMCellNMOS, widthSRAMCellPMOS, widthAccessCMOS, minSenseVoltage;
@@ -53,6 +62,22 @@ public:
 	// Anni update
 	bool globalBusType, globalBufferType, tileBufferType, peBufferType, chipActivation, reLu, novelMapping, pipeline, SARADC, currentMode, validated, synchronous;
 	int globalBufferCoreSizeRow, globalBufferCoreSizeCol, tileBufferCoreSizeRow, tileBufferCoreSizeCol;																								
+	CiMInterfaceMode cimInterfaceMode;
+	bool eascimSigmaDeltaEnable;
+	double eascimNaturalFreqFc;
+	double eascimObservationPeriodTo;
+	double eascimCintFemtoFarad;
+	double eascimIrefNanoAmp;
+	/* Dedicated supply voltage for the ΣΔ modulator block (Cadence 65nm PDK: ~0.4 V). */
+	double eascimSigmaDeltaVdd;
+	/* If false (default): row/WL ΣΔ is not a separate peripheral in PPA — same spirit as baseline, where input DAC is not broken out as its own module. Column/output ΣΔ still uses f_c, T_o, C_int, I_ref below. */
+	bool eascimRowSigmaDeltaSeparateAccounting;
+	/* Optional calibration knobs (defaults set in Param.cpp). */
+	double eascimSettleCycles;
+	double eascimEnergySwitchFactor;
+	double eascimEnergyBiasFactor;
+	double eascimAreaMimPerFfM2;
+	double eascimAreaOverheadFactor;
 	
 	double clkFreq, featuresize, readNoise, resistanceOn, resistanceOff, maxConductance, minConductance;
 	int temp, technode, wireWidth, multipleCells;

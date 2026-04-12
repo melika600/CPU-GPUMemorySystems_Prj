@@ -369,9 +369,9 @@ double ProcessingUnitCalculatePerformance(SubArray *subArray, const vector<vecto
 							columnResistance = GetColumnResistance(input, subArrayMemory, cell, param->parallelRead, subArray->resCellAccess);
 							
 							subArray->CalculateLatency(1e20, columnResistance, CalculateclkFreq);
-							if(CalculateclkFreq && (*clkPeriod < subArray->readLatency)){
-								*clkPeriod = subArray->readLatency;					//clk freq is decided by the longest sensing latency
-							}							
+							if (CalculateclkFreq && (*clkPeriod < subArray->readLatencySync)) {
+								*clkPeriod = subArray->readLatencySync;	// derive clkPeriod from synchronous-equivalent latency
+							}
 							
 							if(!CalculateclkFreq){
 								subArray->CalculatePower(columnResistance);
@@ -448,8 +448,8 @@ double ProcessingUnitCalculatePerformance(SubArray *subArray, const vector<vecto
 				columnResistance = GetColumnResistance(input, subArrayMemory, cell, param->parallelRead, subArray->resCellAccess);
 				
 				subArray->CalculateLatency(1e20, columnResistance, CalculateclkFreq);
-				if(CalculateclkFreq && (*clkPeriod < subArray->readLatency)){
-					*clkPeriod = subArray->readLatency;					//clk freq is decided by the longest sensing latency
+				if (CalculateclkFreq && (*clkPeriod < subArray->readLatencySync)) {
+					*clkPeriod = subArray->readLatencySync;
 				}
 				
 				if(!CalculateclkFreq){
@@ -515,8 +515,8 @@ double ProcessingUnitCalculatePerformance(SubArray *subArray, const vector<vecto
 						
 						subArray->CalculateLatency(1e20, columnResistance, CalculateclkFreq);
 						
-						if(CalculateclkFreq && (*clkPeriod < subArray->readLatency)){
-							*clkPeriod = subArray->readLatency;					//clk freq is decided by the longest sensing latency
+						if (CalculateclkFreq && (*clkPeriod < subArray->readLatencySync)) {
+							*clkPeriod = subArray->readLatencySync;
 						}
 						
 						if(!CalculateclkFreq){

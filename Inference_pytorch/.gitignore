@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# NeuroSIM build artifacts
+NeuroSIM/*.o
+NeuroSIM/main
+
+# Default run logs (omit unless you explicitly need them in git)
+log/default/

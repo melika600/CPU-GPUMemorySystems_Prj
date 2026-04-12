@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from utee import wage_quantizer
 from utee import float_quantizer
+import fcntl
 
 def Neural_Sim(self, input, output): 
     global model_n, FP
@@ -15,8 +16,13 @@ def Neural_Sim(self, input, output):
     print("quantize layer ", self.name)
     input_file_name =  './layer_record_' + str(model_n) + '/input' + str(self.name) + '.csv'
     weight_file_name =  './layer_record_' + str(model_n) + '/weight' + str(self.name) + '.csv'
-    f = open('./layer_record_' + str(model_n) + '/trace_command.sh', "a")
-    f.write(weight_file_name+' '+input_file_name+' ')
+    # Append atomically (avoid corruption when multiple jobs run).
+    trace_path = './layer_record_' + str(model_n) + '/trace_command.sh'
+    with open(trace_path, "a") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.write(weight_file_name + ' ' + input_file_name + ' ')
+        f.flush()
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     if FP:
         weight_q = float_quantizer.float_range_quantize(self.weight,self.wl_weight)
     else:
@@ -123,8 +129,13 @@ def hardware_evaluation(model,wl_weight,wl_activation,subArray,parallelRead,mode
         os.makedirs('./layer_record_'+str(model_name))
     if os.path.exists('./layer_record_'+str(model_name)+'/trace_command.sh'):
         os.remove('./layer_record_'+str(model_name)+'/trace_command.sh')
-    f = open('./layer_record_'+str(model_name)+'/trace_command.sh', "w")
-    f.write('./NeuroSIM/main ./NeuroSIM/NetWork_'+str(model_name)+'.csv '+str(wl_weight)+' '+str(wl_activation)+' '+str(subArray)+' '+str(parallelRead)+' ')
+    trace_path = './layer_record_' + str(model_name) + '/trace_command.sh'
+    with open(trace_path, "w") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        f.write('./NeuroSIM/main ./NeuroSIM/NetWork_' + str(model_name) + '.csv ' +
+                str(wl_weight) + ' ' + str(wl_activation) + ' ' + str(subArray) + ' ' + str(parallelRead) + ' ')
+        f.flush()
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     
     for i, layer in enumerate(model.modules()):
         if isinstance(layer, (FConv2d, QConv2d, nn.Conv2d)) or isinstance(layer, (FLinear, QLinear, nn.Linear)):

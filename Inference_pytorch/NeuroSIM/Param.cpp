@@ -58,7 +58,7 @@ Param::Param() {
 	operationmode = 2;     		// 1: conventionalSequential (Use several multi-bit RRAM as one synapse)
 								// 2: conventionalParallel (Use several multi-bit RRAM as one synapse)
 
-	memcelltype = 1;        	// 1: cell.memCellType = Type::SRAM
+	memcelltype = 2;        	// 1: cell.memCellType = Type::SRAM
 								// 2: cell.memCellType = Type::RRAM
 								// 3: cell.memCellType = Type::FeFET
 	
@@ -98,10 +98,36 @@ Param::Param() {
 	novelMapping = true;        // false: conventional mapping
 								// true: novel mapping
 								
-	SARADC = false;              // false: MLSA
+	SARADC = true;               // false: MLSA
 	                            // true: sar ADC
+
+
+	/* EAS-CiM ΣΔ stream interface mode (decoupled from SARADC). */
+	cimInterfaceMode = CiMInterfaceMode::SIGMA_DELTA_STREAM;
+	eascimSigmaDeltaEnable = (cimInterfaceMode == CiMInterfaceMode::SIGMA_DELTA_STREAM);	// keep for backward compatibility
+	eascimNaturalFreqFc = 100e6;
+	eascimObservationPeriodTo = 5e-9;
+	/* EAS-CiM 2.0 (ISCAS 2025) programmable knobs:
+	 * - MiM C_int: 40–160 fF
+	 * - I_ref: 10–35 nA
+	 * Choose a mid-range default; sweep these for your experiments.
+	 */
+	eascimCintFemtoFarad = 100.0;    // fF
+	eascimIrefNanoAmp = 20.0;        // nA
+	/* Dedicated ΣΔ supply from your Cadence 65nm setup. */
+	eascimSigmaDeltaVdd = 0.4;       // V
+	/* Match baseline-style input path: no extra row-side block in area/latency/energy buckets. */
+	eascimRowSigmaDeltaSeparateAccounting = false;
+	/* Calibration defaults (can be tuned against Cadence/Virtuoso). */
+	eascimSettleCycles = 3.0;
+	eascimEnergySwitchFactor = 1.15;
+	eascimEnergyBiasFactor = 0.28;
+	eascimAreaMimPerFfM2 = 2.0e-14;
+	eascimAreaOverheadFactor = 3.5;
 	currentMode = true;         // false: MLSA use VSA
 	                            // true: MLSA use CSA
+
+								
 	
 	pipeline = true;            // false: layer-by-layer process --> huge leakage energy in HP
 								// true: pipeline process
@@ -341,8 +367,8 @@ Param::Param() {
 	heightInFeatureSizeCrossbar = 2;    // Crossbar Cell height in feature size
 	widthInFeatureSizeCrossbar = 2;     // Crossbar Cell width in feature size
 	
-	resistanceOn = 100e3; // 6e3;               // Ron resistance at Vr in the reported measurement data (need to recalculate below if considering the nonlinearity)
-	resistanceOff = 100e3*17;// 6e3*17;           // Roff resistance at Vr in the reported measurement dat (need to recalculate below if considering the nonlinearity)
+	resistanceOn = 10e3; // 6e3;               // Ron resistance at Vr in the reported measurement data (need to recalculate below if considering the nonlinearity)
+	resistanceOff = 10e3*17;// 6e3*17;           // Roff resistance at Vr in the reported measurement dat (need to recalculate below if considering the nonlinearity)
 	maxConductance = (double) 1/resistanceOn;
 	minConductance = (double) 1/resistanceOff;
 	

@@ -49,6 +49,86 @@ using namespace std;
 
 extern Param *param;
 
+/* Stream interface selection (decoupled from SARADC). */
+#define NS_USE_SIGMA_DELTA (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM)
+/* SubArray member methods: SAR path vs MLSA (ΣΔ uses its own branch via cimInterfaceMode). */
+#define NS_USE_BASELINE_ADC (!NS_USE_SIGMA_DELTA && SARADC)
+/* Use SARADC *or* ΣΔ stream — ΣΔ must not require SARADC=true. */
+#define NS_NEED_ADC_INTERFACE (NS_USE_SIGMA_DELTA || SARADC)
+/* File-scope helpers take SubArray* sa; cannot use bare SARADC. */
+#define NS_SA_BASELINE_ADC(sa) (!NS_USE_SIGMA_DELTA && (sa)->SARADC)
+
+/* Output-side sensing interface: SARADC vs ΣΔ output encoder */
+#define NS_SUBARRAY_ADC_H (NS_USE_SIGMA_DELTA ? sigmaDeltaModulator.height : sarADC.height)
+#define NS_SUBARRAY_ADC_A (NS_USE_SIGMA_DELTA ? sigmaDeltaModulator.area : sarADC.area)
+#define NS_SUBARRAY_ADC_RL (NS_USE_SIGMA_DELTA ? sigmaDeltaModulator.readLatency : sarADC.readLatency)
+#define NS_SUBARRAY_ADC_EDE (NS_USE_SIGMA_DELTA ? sigmaDeltaModulator.readDynamicEnergy : sarADC.readDynamicEnergy)
+
+/* Row-side ΣΔ (WL input encoding) overhead: enabled only for RRAM/FeFET. */
+/* We may still *model* row-side ΣΔ timing even if we do not count its area/energy as a separate module
+ * (baseline-style: input DAC-like overhead not broken out). */
+#define NS_SUBROW_SIGMA_PRESENT (NS_USE_SIGMA_DELTA && (cell.memCellType == Type::RRAM || cell.memCellType == Type::FeFET))
+#define NS_SUBROW_SIGMA_ACCOUNT (NS_SUBROW_SIGMA_PRESENT && param->eascimRowSigmaDeltaSeparateAccounting)
+#define NS_SUBROW_SDM_W (NS_SUBROW_SIGMA_ACCOUNT ? sigmaDeltaModulatorRow.width : 0)
+#define NS_SUBROW_SDM_A (NS_SUBROW_SIGMA_ACCOUNT ? sigmaDeltaModulatorRow.area : 0)
+#define NS_SUBROW_SDM_RL (NS_SUBROW_SIGMA_PRESENT ? sigmaDeltaModulatorRow.readLatency : 0)
+#define NS_SUBROW_SDM_EDE (NS_SUBROW_SIGMA_ACCOUNT ? sigmaDeltaModulatorRow.readDynamicEnergy : 0)
+
+static inline void SubArrayInitSarOrSigmaDelta(SubArray *sa, int numColPerMux, int levelOutputLevels, double clkFreqHz, int numReadCell) {
+	if (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM) {
+		sa->sigmaDeltaModulator.Initialize(numColPerMux, param->eascimNaturalFreqFc, param->eascimObservationPeriodTo,
+				param->eascimCintFemtoFarad, param->eascimIrefNanoAmp, numReadCell,
+				SigmaDeltaModulator::SigmaDeltaRole::OUTPUT_ENCODER);
+		/* Model row-side input encoder whenever ΣΔ stream is selected for RRAM/FeFET.
+		 * Accounting (area/energy buckets) can still be disabled via Param. */
+		if (sa->cell.memCellType == Type::RRAM || sa->cell.memCellType == Type::FeFET) {
+			int numRowSigma = MAX(1, sa->numRowParallel);
+			sa->sigmaDeltaModulatorRow.Initialize(numRowSigma, param->eascimNaturalFreqFc, param->eascimObservationPeriodTo,
+					param->eascimCintFemtoFarad, param->eascimIrefNanoAmp, numReadCell,
+					SigmaDeltaModulator::SigmaDeltaRole::INPUT_ENCODER);
+		}
+	} else if (NS_SA_BASELINE_ADC(sa)) {
+		sa->sarADC.Initialize(numColPerMux, levelOutputLevels, clkFreqHz, numReadCell);
+	}
+}
+
+static inline void SubArrayCalcSarOrSigmaDeltaArea(SubArray *sa, double widthArray, double rowStripHeight) {
+	if (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM) {
+		sa->sigmaDeltaModulator.CalculateUnitArea();
+		sa->sigmaDeltaModulator.CalculateArea(NULL, widthArray, NONE);
+		if (param->eascimRowSigmaDeltaSeparateAccounting &&
+				(sa->cell.memCellType == Type::RRAM || sa->cell.memCellType == Type::FeFET)) {
+			sa->sigmaDeltaModulatorRow.CalculateUnitArea();
+			sa->sigmaDeltaModulatorRow.CalculateArea(rowStripHeight, NULL, NONE);
+		}
+	} else if (NS_SA_BASELINE_ADC(sa)) {
+		sa->sarADC.CalculateUnitArea();
+		sa->sarADC.CalculateArea(NULL, widthArray, NONE);
+	}
+}
+
+static inline void SubArrayCalcSarOrSigmaDeltaLatency(SubArray *sa, double numReadOp) {
+	if (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM) {
+		sa->sigmaDeltaModulator.CalculateLatency(numReadOp);
+		if (sa->cell.memCellType == Type::RRAM || sa->cell.memCellType == Type::FeFET)
+			sa->sigmaDeltaModulatorRow.CalculateLatency(numReadOp);
+	} else if (NS_SA_BASELINE_ADC(sa)) {
+		sa->sarADC.CalculateLatency(numReadOp);
+	}
+}
+
+static inline void SubArrayCalcSarOrSigmaDeltaPower(SubArray *sa, const vector<double> &columnResistance, double numReadOp) {
+	if (param->cimInterfaceMode == Param::CiMInterfaceMode::SIGMA_DELTA_STREAM) {
+		sa->sigmaDeltaModulator.CalculatePower(columnResistance, numReadOp);
+		/* Only count row-side energy when explicitly requested. */
+		if (param->eascimRowSigmaDeltaSeparateAccounting &&
+				(sa->cell.memCellType == Type::RRAM || sa->cell.memCellType == Type::FeFET))
+			sa->sigmaDeltaModulatorRow.CalculatePower(vector<double>(), numReadOp);
+	} else if (NS_SA_BASELINE_ADC(sa)) {
+		sa->sarADC.CalculatePower(columnResistance, numReadOp);
+	}
+}
+
 SubArray::SubArray(InputParameter& _inputParameter, Technology& _tech, MemCell& _cell):
 						inputParameter(_inputParameter), tech(_tech), cell(_cell),
 						wllevelshifter(_inputParameter, _tech, _cell),
@@ -76,7 +156,9 @@ SubArray::SubArray(InputParameter& _inputParameter, Technology& _tech, MemCell& 
 						shiftAddWeight(_inputParameter, _tech, _cell),
 						multilevelSenseAmp(_inputParameter, _tech, _cell),
 						multilevelSAEncoder(_inputParameter, _tech, _cell),
-						sarADC(_inputParameter, _tech, _cell){
+						sarADC(_inputParameter, _tech, _cell),
+						sigmaDeltaModulator(_inputParameter, _tech, _cell),
+						sigmaDeltaModulatorRow(_inputParameter, _tech, _cell){
 	initialized = false;
 	readDynamicEnergyArray = writeDynamicEnergyArray = 0;
 } 
@@ -276,8 +358,8 @@ void SubArray::Initialize(int _numRow, int _numCol, double _unitWireRes){  //ini
 				mux.Initialize(ceil(numCol/numColMuxed), numColMuxed, resCellAccess/(numRowParallel/2), FPGA);       
 				muxDecoder.Initialize(REGULAR_ROW, (int)ceil(log2(numColMuxed)), true, false);
 			}
-			if (SARADC) {
-				sarADC.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
+			if (NS_NEED_ADC_INTERFACE) {
+				SubArrayInitSarOrSigmaDelta(this, numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
 			} else {
 				multilevelSenseAmp.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro, true, currentMode);
 				multilevelSAEncoder.Initialize(levelOutput, numCol/numColMuxed);
@@ -317,8 +399,8 @@ void SubArray::Initialize(int _numRow, int _numCol, double _unitWireRes){  //ini
 				mux.Initialize(ceil(numCol/numColMuxed), numColMuxed, resCellAccess/(numRowParallel/2), FPGA);       
 				muxDecoder.Initialize(REGULAR_ROW, (int)ceil(log2(numColMuxed)), true, false);
 			}
-			if (SARADC) {
-				sarADC.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
+			if (NS_NEED_ADC_INTERFACE) {
+				SubArrayInitSarOrSigmaDelta(this, numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
 			} else {
 				multilevelSenseAmp.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro, true, currentMode);
 				multilevelSAEncoder.Initialize(levelOutput, numCol/numColMuxed);
@@ -402,8 +484,8 @@ void SubArray::Initialize(int _numRow, int _numCol, double _unitWireRes){  //ini
 				mux.Initialize(numInput, numColMuxed, resTg, FPGA);     
 				muxDecoder.Initialize(REGULAR_ROW, (int)ceil(log2(numColMuxed)), true, false);
 			}
-			if (SARADC) {
-				sarADC.Initialize(numCol/numColMuxed, pow(2, avgWeightBit), clkFreq, numReadCellPerOperationNeuro);
+			if (NS_NEED_ADC_INTERFACE) {
+				SubArrayInitSarOrSigmaDelta(this, numCol/numColMuxed, (int)pow(2, avgWeightBit), clkFreq, numReadCellPerOperationNeuro);
 			} else {
 				multilevelSenseAmp.Initialize(numCol/numColMuxed, pow(2, avgWeightBit), clkFreq, numReadCellPerOperationNeuro, false, currentMode);
 				if (avgWeightBit > 1) {
@@ -447,8 +529,8 @@ void SubArray::Initialize(int _numRow, int _numCol, double _unitWireRes){  //ini
 				mux.Initialize(ceil(numCol/numColMuxed), numColMuxed, resTg, FPGA);       
 				muxDecoder.Initialize(REGULAR_ROW, (int)ceil(log2(numColMuxed)), true, false);
 			}
-			if (SARADC) {
-				sarADC.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
+			if (NS_NEED_ADC_INTERFACE) {
+				SubArrayInitSarOrSigmaDelta(this, numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
 			} else {
 				multilevelSenseAmp.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro, true, currentMode);
 				multilevelSAEncoder.Initialize(levelOutput, numCol/numColMuxed);
@@ -518,8 +600,8 @@ void SubArray::Initialize(int _numRow, int _numCol, double _unitWireRes){  //ini
 				mux.Initialize(ceil(numCol/numColMuxed), numColMuxed, resTg, FPGA);       
 				muxDecoder.Initialize(REGULAR_ROW, (int)ceil(log2(numColMuxed/2)), true, true);    
 			}
-			if (SARADC) {
-				sarADC.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
+			if (NS_NEED_ADC_INTERFACE) {
+				SubArrayInitSarOrSigmaDelta(this, numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro);
 			} else {
 				multilevelSenseAmp.Initialize(numCol/numColMuxed, levelOutput, clkFreq, numReadCellPerOperationNeuro, true, currentMode);
 				multilevelSAEncoder.Initialize(levelOutput, numCol/numColMuxed);
@@ -583,9 +665,8 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					double minMuxHeight = MAX(muxDecoder.height, mux.height);
 					mux.CalculateArea(minMuxHeight, widthArray, OVERRIDE);
 				}
-				if (SARADC) {
-					sarADC.CalculateUnitArea();
-					sarADC.CalculateArea(NULL, widthArray, NONE);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaArea(this, widthArray, heightArray);
 				} else {
 					multilevelSenseAmp.CalculateArea(NULL, widthArray, NONE);
 					multilevelSAEncoder.CalculateArea(NULL, widthArray, NONE);
@@ -614,14 +695,14 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 				// 1.4 update : repeater implementation
 				double bufferarea= hInv * wInv * param->buffernumber * 2 * param->numRowSubArray;
 				height = precharger.height + sramWriteDriver.height + heightArray + multilevelSenseAmp.height + multilevelSAEncoder.height + \
-						shiftAddInput.height + shiftAddWeight.height + ((numAdd > 1)==true? (adder.height+dff.height):0) + ((numColMuxed > 1)==true? (mux.height):0)+sarADC.height;
+						shiftAddInput.height + shiftAddWeight.height + ((numAdd > 1)==true? (adder.height+dff.height):0) + ((numColMuxed > 1)==true? (mux.height):0)+NS_SUBARRAY_ADC_H;
 				width = MAX(wlSwitchMatrix.width, ((numColMuxed > 1)==true? (muxDecoder.width):0)) + widthArray + bufferarea/lengthCol; // added for buffer area;
 				area = height * width;
 				usedArea = areaArray + wlSwitchMatrix.area + precharger.area + sramWriteDriver.area + multilevelSenseAmp.area + multilevelSAEncoder.area + \
-						shiftAddInput.area + shiftAddWeight.area + ((numAdd > 1)==true? (adder.area+dff.area):0) + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0)+sarADC.area + bufferarea;
+						shiftAddInput.area + shiftAddWeight.area + ((numAdd > 1)==true? (adder.area+dff.area):0) + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0)+NS_SUBARRAY_ADC_A + bufferarea;
 				emptyArea = area - usedArea;
 
-				areaADC = multilevelSenseAmp.area + precharger.area + multilevelSAEncoder.area + sarADC.area;
+				areaADC = multilevelSenseAmp.area + precharger.area + multilevelSAEncoder.area + NS_SUBARRAY_ADC_A;
 				areaAccum = shiftAddInput.area + shiftAddWeight.area + ((numAdd > 1)==true? (adder.area+dff.area):0);
 				areaOther = wlSwitchMatrix.area + sramWriteDriver.area + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + bufferarea;
 			} else if (BNNsequentialMode || XNORsequentialMode) {
@@ -643,9 +724,8 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					double minMuxHeight = MAX(muxDecoder.height, mux.height);
 					mux.CalculateArea(minMuxHeight, widthArray, OVERRIDE);
 				}
-				if (SARADC) {
-					sarADC.CalculateUnitArea();
-					sarADC.CalculateArea(NULL, widthArray, NONE);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaArea(this, widthArray, heightArray);
 				} else {
 					multilevelSenseAmp.CalculateArea(NULL, widthArray, NONE);
 					multilevelSAEncoder.CalculateArea(NULL, widthArray, NONE);
@@ -655,11 +735,11 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					adder.CalculateArea(NULL, widthArray, NONE);
 					dff.CalculateArea(NULL, widthArray, NONE);
 				}
-				height = precharger.height + sramWriteDriver.height + heightArray + multilevelSenseAmp.height + multilevelSAEncoder.height + sarADC.height + \
+				height = precharger.height + sramWriteDriver.height + heightArray + multilevelSenseAmp.height + multilevelSAEncoder.height + NS_SUBARRAY_ADC_H + \
 						((numColMuxed > 1)==true? (mux.height):0) + ((numAdd > 1)==true? (adder.height+dff.height):0);
 				width = MAX(wlSwitchMatrix.width, ((numColMuxed > 1)==true? (muxDecoder.width):0)) + widthArray;
 				area = height * width;
-				usedArea = areaArray + wlSwitchMatrix.area + precharger.area + sramWriteDriver.area + multilevelSenseAmp.area + multilevelSAEncoder.area + sarADC.area + \
+				usedArea = areaArray + wlSwitchMatrix.area + precharger.area + sramWriteDriver.area + multilevelSenseAmp.area + multilevelSAEncoder.area + NS_SUBARRAY_ADC_A + \
 							((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + ((numAdd > 1)==true? (adder.area+dff.area):0);
 				emptyArea = area - usedArea;
 			}
@@ -691,9 +771,8 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					double minMuxHeight = MAX(muxDecoder.height, mux.height);
 					mux.CalculateArea(minMuxHeight, widthArray, OVERRIDE);
 				}
-				if (SARADC) {
-					sarADC.CalculateUnitArea();
-					sarADC.CalculateArea(NULL, widthArray, NONE);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaArea(this, widthArray, heightArray);
 				} else {
 					multilevelSenseAmp.CalculateArea(NULL, widthArray, NONE);
 					if (avgWeightBit > 1) {
@@ -710,16 +789,16 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					shiftAddWeight.CalculateArea(NULL, widthArray, NONE);
 				}
 				height = ((cell.writeVoltage > 1.5)==true? (sllevelshifter.height):0) + slSwitchMatrix.height + heightArray + ((numColMuxed > 1)==true? (mux.height):0) + \
-						multilevelSenseAmp.height + multilevelSAEncoder.height + adder.height + dff.height + shiftAddInput.height + shiftAddWeight.height + sarADC.height;
-				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlDecoder.width + wlNewDecoderDriver.width + wlDecoderDriver.width, ((numColMuxed > 1)==true? (muxDecoder.width):0) ) + widthArray;
+						multilevelSenseAmp.height + multilevelSAEncoder.height + adder.height + dff.height + shiftAddInput.height + shiftAddWeight.height + NS_SUBARRAY_ADC_H;
+				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlDecoder.width + wlNewDecoderDriver.width + wlDecoderDriver.width + NS_SUBROW_SDM_W, ((numColMuxed > 1)==true? (muxDecoder.width):0) ) + widthArray;
 				area = height * width;
 				usedArea = areaArray + ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlDecoder.area + wlDecoderDriver.area + wlNewDecoderDriver.area + slSwitchMatrix.area + 
-							((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + multilevelSenseAmp.area + multilevelSAEncoder.area + adder.area + dff.area + shiftAddInput.area + shiftAddWeight.area + sarADC.area;
+							((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + multilevelSenseAmp.area + multilevelSAEncoder.area + adder.area + dff.area + shiftAddInput.area + shiftAddWeight.area + NS_SUBARRAY_ADC_A + NS_SUBROW_SDM_A;
 				emptyArea = area - usedArea;
 				
-				areaADC = multilevelSenseAmp.area + multilevelSAEncoder.area + sarADC.area;
+				areaADC = multilevelSenseAmp.area + multilevelSAEncoder.area + NS_SUBARRAY_ADC_A;
 				areaAccum = adder.area + dff.area + shiftAddInput.area + shiftAddWeight.area;
-				areaOther = ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlDecoder.area + wlNewDecoderDriver.area + wlDecoderDriver.area + slSwitchMatrix.area + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0);
+				areaOther = ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlDecoder.area + wlNewDecoderDriver.area + wlDecoderDriver.area + slSwitchMatrix.area + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + NS_SUBROW_SDM_A;
 			} else if (conventionalParallel) { 
 				if (cell.accessType == CMOS_access) {
 					wlNewSwitchMatrix.CalculateArea(heightArray, NULL, NONE);
@@ -733,9 +812,8 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					double minMuxHeight = MAX(muxDecoder.height, mux.height);
 					mux.CalculateArea(minMuxHeight, widthArray, OVERRIDE);
 				}
-				if (SARADC) {
-					sarADC.CalculateUnitArea();
-					sarADC.CalculateArea(NULL, widthArray, NONE);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaArea(this, widthArray, heightArray);
 				} else {
 					multilevelSenseAmp.CalculateArea(NULL, widthArray, NONE);
 					multilevelSAEncoder.CalculateArea(NULL, widthArray, NONE);
@@ -764,14 +842,14 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 				double bufferarea= hInv * wInv * param->buffernumber * 2 * param->numRowSubArray;
 				
 				height = ((cell.writeVoltage > 1.5)==true? (sllevelshifter.height):0) + slSwitchMatrix.height + heightArray + ((numColMuxed > 1)==true? (mux.height):0) + \
-						multilevelSenseAmp.height + multilevelSAEncoder.height + shiftAddWeight.height + shiftAddInput.height + ((numAdd > 1)==true? (adder.height+dff.height):0) + sarADC.height;
-				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlNewSwitchMatrix.width + wlSwitchMatrix.width, ((numColMuxed > 1)==true? (muxDecoder.width):0)) + widthArray + bufferarea/lengthCol; // added;
+						multilevelSenseAmp.height + multilevelSAEncoder.height + shiftAddWeight.height + shiftAddInput.height + ((numAdd > 1)==true? (adder.height+dff.height):0) + NS_SUBARRAY_ADC_H;
+				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlNewSwitchMatrix.width + wlSwitchMatrix.width + NS_SUBROW_SDM_W, ((numColMuxed > 1)==true? (muxDecoder.width):0)) + widthArray + bufferarea/lengthCol; // added;
 				usedArea = areaArray + ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlSwitchMatrix.area + wlNewSwitchMatrix.area + slSwitchMatrix.area + 
-							((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + multilevelSenseAmp.area  + multilevelSAEncoder.area + shiftAddWeight.area + shiftAddInput.area + ((numAdd > 1)==true? (adder.area+dff.area):0) + sarADC.area + bufferarea;
+							((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + multilevelSenseAmp.area  + multilevelSAEncoder.area + shiftAddWeight.area + shiftAddInput.area + ((numAdd > 1)==true? (adder.area+dff.area):0) + NS_SUBARRAY_ADC_A + NS_SUBROW_SDM_A + bufferarea;
 				
-				areaADC = multilevelSenseAmp.area + multilevelSAEncoder.area + sarADC.area;
+				areaADC = multilevelSenseAmp.area + multilevelSAEncoder.area + NS_SUBARRAY_ADC_A;
 				areaAccum = shiftAddWeight.area + shiftAddInput.area + ((numAdd > 1)==true? (adder.area+dff.area):0);
-				areaOther = ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlNewSwitchMatrix.area + wlSwitchMatrix.area + slSwitchMatrix.area + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + bufferarea;
+				areaOther = ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlNewSwitchMatrix.area + wlSwitchMatrix.area + slSwitchMatrix.area + ((numColMuxed > 1)==true? (mux.area + muxDecoder.area):0) + bufferarea + NS_SUBROW_SDM_A;
 				
 				area = height * width;				
 				emptyArea = area - usedArea;
@@ -820,9 +898,8 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					double minMuxHeight = MAX(muxDecoder.height, mux.height);
 					mux.CalculateArea(minMuxHeight, widthArray, OVERRIDE);
 				}
-				if (SARADC) {
-					sarADC.CalculateUnitArea();
-					sarADC.CalculateArea(NULL, widthArray, NONE);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaArea(this, widthArray, heightArray);
 				} else {
 					multilevelSenseAmp.CalculateArea(NULL, widthArray, NONE);
 					multilevelSAEncoder.CalculateArea(NULL, widthArray, NONE);
@@ -832,11 +909,11 @@ void SubArray::CalculateArea() {  //calculate layout area for total design
 					adder.CalculateArea(NULL, widthArray, NONE);
 					dff.CalculateArea(NULL, widthArray, NONE);
 				}
-				height = ((cell.writeVoltage > 1.5)==true? (sllevelshifter.height):0) + slSwitchMatrix.height + heightArray + mux.height + multilevelSenseAmp.height + multilevelSAEncoder.height + sarADC.height + ((numAdd > 1)==true? (adder.height+dff.height):0);
-				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlNewSwitchMatrix.width + wlSwitchMatrix.width, muxDecoder.width) + widthArray;
+				height = ((cell.writeVoltage > 1.5)==true? (sllevelshifter.height):0) + slSwitchMatrix.height + heightArray + mux.height + multilevelSenseAmp.height + multilevelSAEncoder.height + NS_SUBARRAY_ADC_H + ((numAdd > 1)==true? (adder.height+dff.height):0);
+				width = MAX( ((cell.writeVoltage > 1.5)==true? (wllevelshifter.width + bllevelshifter.width):0) + wlNewSwitchMatrix.width + wlSwitchMatrix.width + NS_SUBROW_SDM_W, muxDecoder.width) + widthArray;
 				area = height * width;
 				usedArea = areaArray + ((cell.writeVoltage > 1.5)==true? (wllevelshifter.area + bllevelshifter.area + sllevelshifter.area):0) + wlSwitchMatrix.area + wlNewSwitchMatrix.area + slSwitchMatrix.area + 
-							mux.area + multilevelSenseAmp.area + muxDecoder.area + multilevelSAEncoder.area + sarADC.area + ((numAdd > 1)==true? (adder.area+dff.area):0);
+							mux.area + multilevelSenseAmp.area + muxDecoder.area + multilevelSAEncoder.area + NS_SUBARRAY_ADC_A + NS_SUBROW_SDM_A + ((numAdd > 1)==true? (adder.area+dff.area):0);
 				emptyArea = area - usedArea;
 			}
 		} 
@@ -849,6 +926,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 	} else {
 		
 		readLatency = 0;
+		readLatencySync = 0;
 		readLatencyADC = 0;
 		readLatencyAccum = 0;
 		readLatencyOther = 0;
@@ -883,6 +961,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						readLatency += colDelay;
 						readLatency += senseAmp.readLatency;
 						readLatency *= (validated==true? param->beta : 1);	// latency factor of sensing cycle, beta = 1.4 by default
+						readLatencySync = readLatency;
 					}
 				} 
 				if (!CalculateclkFreq) {
@@ -966,8 +1045,8 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						wlSwitchMatrix.CalculateLatency(1e20, capRow1, resRow, 1, 2*numWriteOperationPerRow*numRow*activityRowWrite);
 					}
 					precharger.CalculateLatency(1e20, capCol, 1, numWriteOperationPerRow*numRow*activityRowWrite);
-					if (SARADC) {
-						sarADC.CalculateLatency(1);
+					if (NS_NEED_ADC_INTERFACE) {
+						SubArrayCalcSarOrSigmaDeltaLatency(this, 1);
 					} else {
 						multilevelSenseAmp.CalculateLatency(columnResistance, 1, 1);
 						multilevelSAEncoder.CalculateLatency(1e20, 1);
@@ -1007,8 +1086,13 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						param->ADClatency = multilevelSenseAmp.readLatency;
 
 						readLatency += multilevelSAEncoder.readLatency;
-						readLatency += sarADC.readLatency;
+						readLatency += NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL;
 						readLatency *= (validated==true? param->beta : 1);	// latency factor of sensing cycle, beta = 1.4 by default
+						readLatencySync = readLatency;
+						if (NS_USE_SIGMA_DELTA) {
+							/* Exclude output-side ΣΔ observation window from synchronous clkPeriod derivation. */
+							readLatencySync = max(0.0, readLatencySync - sigmaDeltaModulator.readLatency);
+						}
 					}
 				}
 				if (!CalculateclkFreq) {
@@ -1036,7 +1120,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 							readLatencyAccum += ceil(numColMuxed/numCellPerSynapse) * MAX(ceil(shiftAddInput.adder.readLatency*clkFreq) - (readLatencyADC+readLatencyAccum)/ceil(numColMuxed/numCellPerSynapse), 0);	
 						} 
 					} else {
-						readLatencyADC = (precharger.readLatency + colDelay + multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + sarADC.readLatency) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
+						readLatencyADC = (precharger.readLatency + colDelay + multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
 						readLatencyOther = MAX(wlSwitchMatrix.readLatency * numAdd, ((numColMuxed > 1)==true? (mux.readLatency+muxDecoder.readLatency):0) ) * numColMuxed * (validated==true? param->beta : 1);
 						// Anni update: hide readLatencyAccum by pipeline
 						readLatencyAccum = MAX(adder.readLatency * numColMuxed*(numAdd-1) + shiftAddWeight.adder.readLatency * (numCellPerSynapse-1)*ceil(numColMuxed/numCellPerSynapse) + \
@@ -1095,8 +1179,8 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 				if (CalculateclkFreq || !param->synchronous) {
 					wlSwitchMatrix.CalculateLatency(1e20, capRow1, resRow, 1, 2*numWriteOperationPerRow*numRow*activityRowWrite);
 					precharger.CalculateLatency(1e20, capCol, 1, numWriteOperationPerRow*numRow*activityRowWrite);					
-					if (SARADC) {
-						sarADC.CalculateLatency(1);
+					if (NS_NEED_ADC_INTERFACE) {
+						SubArrayCalcSarOrSigmaDeltaLatency(this, 1);
 					} else {
 						multilevelSenseAmp.CalculateLatency(columnResistance, 1, 1);
 						multilevelSAEncoder.CalculateLatency(1e20, 1);
@@ -1123,8 +1207,12 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// readLatency += colDelay;
 						readLatency += multilevelSenseAmp.readLatency;
 						readLatency += multilevelSAEncoder.readLatency;
-						readLatency += sarADC.readLatency;
+						readLatency += NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL;
 						readLatency *= (validated==true? param->beta : 1);	// latency factor of sensing cycle, beta = 1.4 by default
+						readLatencySync = readLatency;
+						if (NS_USE_SIGMA_DELTA) {
+							readLatencySync = max(0.0, readLatencySync - sigmaDeltaModulator.readLatency);
+						}
 					}
 				}
 				if (!CalculateclkFreq) {
@@ -1138,7 +1226,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// adder is pipelined with ADC
 						readLatencyAccum = numColMuxed * (numAdd-1) * (ceil(adder.readLatency*clkFreq)-1);
 					} else {
-						readLatencyADC = (precharger.readLatency + colDelay + multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + sarADC.readLatency) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
+						readLatencyADC = (precharger.readLatency + colDelay + multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
 						readLatencyOther = MAX(wlSwitchMatrix.readLatency * numAdd, ((numColMuxed > 1)==true? (mux.readLatency+muxDecoder.readLatency):0) ) * numColMuxed * (validated==true? param->beta : 1);
 						// Anni update: hide readLatencyAccum by pipeline
 						readLatencyAccum = MAX(adder.readLatency * numColMuxed * (numAdd-1) - readLatencyADC - readLatencyOther, 0);
@@ -1170,8 +1258,8 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// 1.4 update
 						muxDecoder.CalculateLatency(1e20, mux.capTgGateN*ceil(numCol/numColMuxed), mux.capTgGateP*ceil(numCol/numColMuxed), 0, 0, 1, 0);
 					}
-					if (SARADC) {
-						sarADC.CalculateLatency(1);
+					if (NS_NEED_ADC_INTERFACE) {
+						SubArrayCalcSarOrSigmaDeltaLatency(this, 1);
 					} else {
 						multilevelSenseAmp.CalculateLatency(columnResistance, 1, 1);
 						if (avgWeightBit > 1) {
@@ -1183,8 +1271,12 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						readLatency += colDelay;
 						readLatency += multilevelSenseAmp.readLatency;
 						readLatency += multilevelSAEncoder.readLatency;
-						readLatency += sarADC.readLatency;
+						readLatency += NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL;
 						readLatency *= (validated==true? param->beta : 1);		// latency factor of sensing cycle, beta = 1.4 by default
+						readLatencySync = readLatency;
+						if (NS_USE_SIGMA_DELTA) {
+							readLatencySync = max(0.0, readLatencySync - sigmaDeltaModulator.readLatency);
+						}
 					}
 				}
 				if (!CalculateclkFreq) {
@@ -1209,7 +1301,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 							readLatencyAccum += ceil(numColMuxed/numCellPerSynapse) * MAX(ceil(shiftAddInput.adder.readLatency*clkFreq) - (readLatencyADC+readLatencyAccum)/ceil(numColMuxed/numCellPerSynapse), 0);	
 						} 
 					} else {
-						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + sarADC.readLatency + colDelay) * (numRow*activityRowRead*numColMuxed) * (validated==true? param->beta : 1);
+						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL + colDelay) * (numRow*activityRowRead*numColMuxed) * (validated==true? param->beta : 1);
 						readLatencyOther = MAX((wlDecoder.readLatency + wlNewDecoderDriver.readLatency + wlDecoderDriver.readLatency)*numRow*activityRowRead, ((numColMuxed > 1)==true? (mux.readLatency+muxDecoder.readLatency):0)) * numColMuxed * (validated==true? param->beta : 1);
 						// Anni update: hide readLatencyAccum by pipeline
 						readLatencyAccum = MAX(adder.readLatency * numColMuxed*(numRow*activityRowRead-1) + shiftAddWeight.adder.readLatency * (numCellPerSynapse-1)*ceil(numColMuxed/numCellPerSynapse) + \
@@ -1283,8 +1375,8 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// 1.4 update
 						muxDecoder.CalculateLatency(1e20, mux.capTgGateN*ceil(numCol/numColMuxed), mux.capTgGateP*ceil(numCol/numColMuxed), 0, 0, 1, 0);
 					}
-					if (SARADC) {
-						sarADC.CalculateLatency(1);
+					if (NS_NEED_ADC_INTERFACE) {
+						SubArrayCalcSarOrSigmaDeltaLatency(this, 1);
 					} else {
 						multilevelSenseAmp.CalculateLatency(columnResistance, 1, 1);
 						multilevelSAEncoder.CalculateLatency(1e20, 1);
@@ -1295,8 +1387,12 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// readLatency += colDelay;
 						readLatency += multilevelSenseAmp.readLatency;
 						readLatency += multilevelSAEncoder.readLatency;
-						readLatency += sarADC.readLatency;
+						readLatency += NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL;
 						readLatency *= (validated==true? param->beta : 1);	// latency factor of sensing cycle, beta = 1.4 by default									
+						readLatencySync = readLatency;
+						if (NS_USE_SIGMA_DELTA) {
+							readLatencySync = max(0.0, readLatencySync - sigmaDeltaModulator.readLatency);
+						}
 						param->rowdelay = wlNewSwitchMatrix.readLatency + wlSwitchMatrix.readLatency + bufferlatency;
 						param->muxdelay = mux.readLatency+muxDecoder.readLatency;
 						param->ADClatency = multilevelSenseAmp.readLatency;					
@@ -1329,7 +1425,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 							readLatencyAccum += ceil(numColMuxed/numCellPerSynapse) * MAX(ceil(shiftAddInput.adder.readLatency*clkFreq) - (readLatencyADC+readLatencyAccum)/ceil(numColMuxed/numCellPerSynapse), 0);	
 						} 
 					} else {
-						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + sarADC.readLatency + colDelay) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
+						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL + colDelay) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
 						readLatencyOther = MAX((wlNewSwitchMatrix.readLatency + wlSwitchMatrix.readLatency) * numAdd, ((numColMuxed > 1)==true? (mux.readLatency+muxDecoder.readLatency):0)) * numColMuxed * (validated==true? param->beta : 1);
 						// Anni update: hide readLatencyAccum by pipeline
 						readLatencyAccum = MAX(adder.readLatency * numColMuxed*(numAdd-1) + shiftAddWeight.adder.readLatency * (numCellPerSynapse-1)*ceil(numColMuxed/numCellPerSynapse) + \
@@ -1409,8 +1505,8 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// 1.4 update 
 						muxDecoder.CalculateLatency(1e20, mux.capTgGateN*ceil(numCol/numColMuxed), mux.capTgGateP*ceil(numCol/numColMuxed), 0, 0, 1, 0);
 					}
-					if (SARADC) {
-						sarADC.CalculateLatency(1);
+					if (NS_NEED_ADC_INTERFACE) {
+						SubArrayCalcSarOrSigmaDeltaLatency(this, 1);
 					} else {
 						multilevelSenseAmp.CalculateLatency(columnResistance, 1, 1);
 						multilevelSAEncoder.CalculateLatency(1e20, 1);
@@ -1420,8 +1516,12 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// readLatency += colDelay;
 						readLatency += multilevelSenseAmp.readLatency;
 						readLatency += multilevelSAEncoder.readLatency;
-						readLatency += sarADC.readLatency;
+						readLatency += NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL;
 						readLatency *= (validated==true? param->beta : 1);	// latency factor of sensing cycle, beta = 1.4 by default
+						readLatencySync = readLatency;
+						if (NS_USE_SIGMA_DELTA) {
+							readLatencySync = max(0.0, readLatencySync - sigmaDeltaModulator.readLatency);
+						}
 					}
 				}
 				if (!CalculateclkFreq) {					
@@ -1435,7 +1535,7 @@ void SubArray::CalculateLatency(double columnRes, const vector<double> &columnRe
 						// adder is pipelined with ADC
 						readLatencyAccum = numColMuxed * (numAdd-1) * (ceil(adder.readLatency*clkFreq)-1);
 					} else { 
-						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + sarADC.readLatency + colDelay) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
+						readLatencyADC = (multilevelSenseAmp.readLatency + multilevelSAEncoder.readLatency + NS_SUBARRAY_ADC_RL + NS_SUBROW_SDM_RL + colDelay) * numColMuxed * (validated==true? param->beta : 1) * numAdd;
 						readLatencyOther = MAX((wlNewSwitchMatrix.readLatency + wlSwitchMatrix.readLatency) * numAdd, ((numColMuxed > 1)==true? (mux.readLatency+muxDecoder.readLatency):0)) * numColMuxed * (validated==true? param->beta : 1);
 						// Anni update: hide readLatencyAccum by pipeline
 						readLatencyAccum = MAX(adder.readLatency * numColMuxed * (numAdd-1) - readLatencyADC - readLatencyOther, 0);
@@ -1545,8 +1645,8 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 					muxDecoder.CalculatePower(numColMuxed, 1);
 				}
 				// Anni update: numAdd
-				if (SARADC) {
-					sarADC.CalculatePower(columnResistance, numAdd);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaPower(this, columnResistance, numAdd);
 				} else {
 					multilevelSenseAmp.CalculatePower(columnResistance, numAdd);
 					multilevelSAEncoder.CalculatePower(numColMuxed * numAdd);
@@ -1587,10 +1687,10 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 				readDynamicEnergy += adder.readDynamicEnergy;
 				readDynamicEnergy += dff.readDynamicEnergy;
 				readDynamicEnergy += shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy;
-				readDynamicEnergy += sarADC.readDynamicEnergy;
+				readDynamicEnergy += NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 
 				// 1.4 update : precharger not needed 230619
-				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + sarADC.readDynamicEnergy;				
+				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;				
 				// Anni update
 				readDynamicEnergyAccum = shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy + adder.readDynamicEnergy + dff.readDynamicEnergy;
 				readDynamicEnergyOther = wlSwitchMatrix.readDynamicEnergy + ((numColMuxed > 1)==true? (mux.readDynamicEnergy + muxDecoder.readDynamicEnergy):0);
@@ -1667,8 +1767,8 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 					mux.CalculatePower(numColMuxed);	// Mux still consumes energy during row-by-row read
 					muxDecoder.CalculatePower(numColMuxed, 1);
 				}
-				if (SARADC) {
-					sarADC.CalculatePower(columnResistance, numAdd);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaPower(this, columnResistance, numAdd);
 				} else {
 					multilevelSenseAmp.CalculatePower(columnResistance, numAdd);
 					multilevelSAEncoder.CalculatePower(numColMuxed*numAdd);
@@ -1694,7 +1794,7 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 				readDynamicEnergy += readDynamicEnergyArray;
 				readDynamicEnergy += multilevelSenseAmp.readDynamicEnergy;
 				readDynamicEnergy += multilevelSAEncoder.readDynamicEnergy;
-				readDynamicEnergy += sarADC.readDynamicEnergy;
+				readDynamicEnergy += NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 				// Anni update:
 				readDynamicEnergy += ((numColMuxed > 1)==true? mux.readDynamicEnergy:0);
 				readDynamicEnergy += ((numColMuxed > 1)==true? muxDecoder.readDynamicEnergy:0);
@@ -1742,8 +1842,8 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 					muxDecoder.CalculatePower(numColMuxed, 1);
 				}
 
-				if (SARADC) {
-					sarADC.CalculatePower(columnResistance, numRow*activityRowRead);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaPower(this, columnResistance, numRow*activityRowRead);
 				} else {
 					multilevelSenseAmp.CalculatePower(columnResistance, numRow*activityRowRead);
 					if (avgWeightBit > 1) {
@@ -1775,9 +1875,9 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 				readDynamicEnergy += shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy;
 				readDynamicEnergy += readDynamicEnergyArray;
 				readDynamicEnergy += multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy;
-				readDynamicEnergy += sarADC.readDynamicEnergy;
+				readDynamicEnergy += NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 				
-				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + sarADC.readDynamicEnergy;
+				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 				readDynamicEnergyAccum = adder.readDynamicEnergy + dff.readDynamicEnergy + shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy;
 				readDynamicEnergyOther = wlDecoder.readDynamicEnergy + wlNewDecoderDriver.readDynamicEnergy + wlDecoderDriver.readDynamicEnergy + ((numColMuxed > 1)==true? (mux.readDynamicEnergy + muxDecoder.readDynamicEnergy):0);
 
@@ -1830,8 +1930,8 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 					muxDecoder.CalculatePower(numColMuxed, 1);
 				}
 				// Anni update: numAdd
-				if (SARADC) {
-					sarADC.CalculatePower(columnResistance, numAdd);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaPower(this, columnResistance, numAdd);
 				} else {
 					multilevelSenseAmp.CalculatePower(columnResistance, numAdd);
 					multilevelSAEncoder.CalculatePower(numColMuxed * numAdd);
@@ -1866,9 +1966,9 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 				readDynamicEnergy += multilevelSAEncoder.readDynamicEnergy;
 				readDynamicEnergy += shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy;
 				readDynamicEnergy += readDynamicEnergyArray;
-				readDynamicEnergy += sarADC.readDynamicEnergy;	
+				readDynamicEnergy += NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;	
 				
-				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + sarADC.readDynamicEnergy;
+				readDynamicEnergyADC = readDynamicEnergyArray + multilevelSenseAmp.readDynamicEnergy + multilevelSAEncoder.readDynamicEnergy + NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 				// Anni update: accum, other
 				readDynamicEnergyAccum = shiftAddWeight.readDynamicEnergy + shiftAddInput.readDynamicEnergy + adder.readDynamicEnergy + dff.readDynamicEnergy;				
 				readDynamicEnergyOther = wlNewSwitchMatrix.readDynamicEnergy + wlSwitchMatrix.readDynamicEnergy + ((numColMuxed > 1)==true? (mux.readDynamicEnergy + muxDecoder.readDynamicEnergy):0);
@@ -1992,8 +2092,8 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 					muxDecoder.CalculatePower(numColMuxed, 1);
 				}
 				// Anni update: numAdd
-				if (SARADC) {
-					sarADC.CalculatePower(columnResistance, numAdd);
+				if (NS_NEED_ADC_INTERFACE) {
+					SubArrayCalcSarOrSigmaDeltaPower(this, columnResistance, numAdd);
 				} else {
 					multilevelSenseAmp.CalculatePower(columnResistance, numAdd);
 					multilevelSAEncoder.CalculatePower(numColMuxed * numAdd);
@@ -2023,7 +2123,7 @@ void SubArray::CalculatePower(const vector<double> &columnResistance) {
 				readDynamicEnergy += multilevelSenseAmp.readDynamicEnergy;
 				readDynamicEnergy += multilevelSAEncoder.readDynamicEnergy;
 				readDynamicEnergy += readDynamicEnergyArray;
-				readDynamicEnergy += sarADC.readDynamicEnergy;
+				readDynamicEnergy += NS_SUBARRAY_ADC_EDE + NS_SUBROW_SDM_EDE;
 
 				// Write				
 				// writeDynamicEnergyArray = writeDynamicEnergyArray;

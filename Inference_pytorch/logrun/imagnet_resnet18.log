@@ -1,0 +1,46 @@
+nohup: ignoring input
+/home/qfc2zn/DNN_NeuroSim_V1.4/Inference_pytorch/log/default/ADCprecision=5/batch_size=200/cellBit=1/dataset=imagenet/decreasing_lr=140,180/detect=0/grad_scale=8/inference=1/lr=0.01/mode=FP/model=ResNet18/onoffratio=100.0/parallelRead=128/seed=117/subArray=128/t=0/target=0/v=0/vari=0.0/wl_activate=8/wl_error=8/wl_grad=8/wl_weight=8
+=================FLAGS==================
+dataset: imagenet
+model: ResNet18
+mode: FP
+batch_size: 200
+epochs: 200
+grad_scale: 8
+seed: 117
+log_interval: 100
+test_interval: 1
+logdir: /home/qfc2zn/DNN_NeuroSim_V1.4/Inference_pytorch/log/default/ADCprecision=5/batch_size=200/cellBit=1/dataset=imagenet/decreasing_lr=140,180/detect=0/grad_scale=8/inference=1/lr=0.01/mode=FP/model=ResNet18/onoffratio=100.0/parallelRead=128/seed=117/subArray=128/t=0/target=0/v=0/vari=0.0/wl_activate=8/wl_error=8/wl_grad=8/wl_weight=8
+lr: 0.01
+decreasing_lr: 140,180
+wl_weight: 8
+wl_grad: 8
+wl_activate: 8
+wl_error: 8
+inference: 1
+subArray: 128
+parallelRead: 128
+ADCprecision: 5
+cellBit: 1
+onoffratio: 100.0
+vari: 0.0
+t: 0
+v: 0
+detect: 0
+target: 0
+========================================
+Building ImageNet data loader with 1 workers
+Traceback (most recent call last):
+  File "/home/qfc2zn/DNN_NeuroSim_V1.4/Inference_pytorch/inference.py", line 78, in <module>
+    train_loader, test_loader = dataset.get_imagenet(batch_size=args.batch_size, num_workers=1)
+  File "/home/qfc2zn/DNN_NeuroSim_V1.4/Inference_pytorch/models/dataset.py", line 87, in get_imagenet
+    imagenet_traindata = datasets.ImageFolder(train_path, transform=transform)
+  File "/home/qfc2zn/.conda/envs/neurosim/lib/python3.10/site-packages/torchvision/datasets/folder.py", line 328, in __init__
+    super().__init__(
+  File "/home/qfc2zn/.conda/envs/neurosim/lib/python3.10/site-packages/torchvision/datasets/folder.py", line 149, in __init__
+    classes, class_to_idx = self.find_classes(self.root)
+  File "/home/qfc2zn/.conda/envs/neurosim/lib/python3.10/site-packages/torchvision/datasets/folder.py", line 234, in find_classes
+    return find_classes(directory)
+  File "/home/qfc2zn/.conda/envs/neurosim/lib/python3.10/site-packages/torchvision/datasets/folder.py", line 41, in find_classes
+    classes = sorted(entry.name for entry in os.scandir(directory) if entry.is_dir())
+FileNotFoundError: [Errno 2] No such file or directory: '/home/shimeng/Documents/Data/train'
