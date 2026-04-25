@@ -1,0 +1,2 @@
+run,model,mode,subarray,to_s,fc_hz,acc_pct,clk_ns,pipe_ns,dyn_pj,topsw,fps,chip_area_um2
+VGG8_baseline_fair_sub128,VGG8,baseline,128,,,92.0,8.43196,1277510.0,108446000.0,8.45692,782.775,2574300000.0
