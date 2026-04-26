@@ -1,6 +1,6 @@
 # Sigma-Delta (ΣΔ) Stream CiM: Flow and Implementation
 
-This document describes how **event-driven / stream-based ΣΔ** activation I/O is modeled in this NeuroSim fork, how it differs from the **baseline SAR-ADC** path, and where the code lives.
+This document describes how **stream-based ΣΔ** activation I/O is modeled in this NeuroSim fork, how it differs from the **baseline SAR-ADC** path, and where the code lives.
 
 ---
 
@@ -17,8 +17,8 @@ In NeuroSim, these blocks appear explicitly in layer/chip summaries (buffer late
 ### Sigma-delta stream path (this project)
 
 1. The **same physical read / CiM** still produces a signal that must be **resolved in time**; we replace the **SAR ADC block** with a **ΣΔ modulator** model (`SigmaDeltaModulator` / row variant) when `cimInterfaceMode == SIGMA_DELTA_STREAM`.
-2. **Information is encoded in the time domain**: a 1-bit (or stream) representation whose **time-average** tracks the analog value over an **observation window** \(T_o\), with a **carrier / natural frequency** \(f_c\) and analog parameters (e.g. \(C_\mathrm{int}\), \(I_\mathrm{ref}\), \(V_\mathrm{dd}\)) used for modulator PPA.
-3. **Periphery accounting**: aligned with the EAS-CiM style story—**no separate digital accumulation trees, large SRAM buffers, or heavy global interconnect** as *first-class* contributors in ΣΔ mode for the main datapath. Those paths are **gated off** at PE, tile, and chip so their **latency and dynamic energy are zero** for buffer / accumulation / bus-style blocks (subarray-level breakdown may still show energy under generic labels where ΣΔ energy is bucketed). **Max-pooling and chip-level activation** are handled separately: by default in ΣΔ mode they use an **optional analog stream model** (integrate-and-compare style comparator budgeting over \(T_o\); see §7). Set **`EASCIM_ANALOG_POOL_ACT=0`** to fall back to the **digital** `MaxPooling` / activation PPA instead.
+2. **Information is encoded in the time domain**: a 1-bit stream representation whose **time-average** tracks the analog value over an **observation window** \(T_o\), with a **natural frequency** \(f_c\) of modulator and analog parameters (e.g. \(C_\mathrm{int}\), \(I_\mathrm{ref}\), \(V_\mathrm{dd}\)) used for modulator PPA.
+3. **Periphery accounting**: aligned with the EAS-CiM style story—**no separate digital accumulation trees, large SRAM buffers, or heavy global interconnect** as *first-class* contributors in ΣΔ mode for the main datapath. Those paths are **gated off** at PE, tile, and chip so their **latency and dynamic energy are zero** for buffer / accumulation / bus-style blocks (subarray-level breakdown may still show energy under generic labels where ΣΔ energy is bucketed). **Max-pooling and chip-level activation** are handled separately: by default in ΣΔ mode they use an **analog stream model** (integrate-and-compare style comparator budgeting over \(T_o\); see §7). Set **`EASCIM_ANALOG_POOL_ACT=0`** to fall back to the **digital** `MaxPooling` / activation PPA instead.
 
 So: **ΣΔ = swap readout interface + bypass most modeled digital post-processing hierarchy**, with **pool + activation** either as a lightweight analog-style counter model or full digital blocks, not a change to the CNN math in PyTorch.
 
