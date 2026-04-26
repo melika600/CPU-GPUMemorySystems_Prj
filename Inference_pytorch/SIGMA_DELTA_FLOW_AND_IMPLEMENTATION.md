@@ -22,7 +22,21 @@ In NeuroSim, these blocks appear explicitly in layer/chip summaries (buffer late
 
 So: **ΣΔ = swap readout interface + bypass most modeled digital post-processing hierarchy**, with **pool + activation** either as a lightweight analog-style counter model or full digital blocks, not a change to the CNN math in PyTorch.
 
----
+### Physical picture (first-order ΣΔ)
+
+A simplified first-order loop contains:
+
+1. **Integrator** on capacitor \(C_{\mathrm{int}}\) driven by the **difference** between input current (proportional to the quantity to encode) and **feedback** current switched according to the 1-bit quantizer output.
+2. **Comparator / hysteresis stage** (in the paper: DLS inverter) deciding when the integrator has crossed a threshold band.
+3. **1-bit DAC / feedback** that injects \(\pm I_{\mathrm{ref}}\) (or equivalent) back onto \(C_{\mathrm{int}}\).
+
+Over a finite **observation window** \(T_o\), the **average duty cycle** \(\delta\) of the output bit stream relates to the normalized input (paper Eqs. (1)–(2) in the EAS-CiM 2.0 manuscript). A higher **natural clocking rate** \(f_c\) (internal ring-oscillator / DLS activity) allows more **edges per \(T_o\)**, improving **effective resolution** at the cost of **dynamic energy** (more switching on \(C_{\mathrm{int}}\)).
+
+In NeuroSim, **`SigmaDeltaModulator`** (`SigmaDeltaModulator.h` / `.cpp`) encapsulates:
+
+- **Roles:** `OUTPUT_ENCODER` (readout stream after array) vs `INPUT_ENCODER` (row / WL side, when instantiated as `sigmaDeltaModulatorRow`).
+- **Knobs:** `naturalFreqFc` (\(f_c\)), `observationPeriodTo` (\(T_o\)), `cIntFemtoFarad`, `iRefNanoAmp`, plus `eascimSigmaDeltaVdd` on `Param` for switching-energy scaling.
+
 
 ## 2. Where it is implemented (code map)
 
