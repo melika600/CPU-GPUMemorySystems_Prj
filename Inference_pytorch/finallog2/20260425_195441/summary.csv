@@ -1,0 +1,5 @@
+run,model,mode,subarray,to_s,fc_hz,acc_pct,clk_ns,pipe_ns,dyn_pj,topsw,fps,chip_area_um2
+DenseNet40_baseline_sub128,DenseNet40,baseline,128,,,80.0,8.43196,637956.0,68345700.0,6.65232,1567.51,1152050000.0
+DenseNet40_sigmadelta_sub128_To1.5e-08_fc200e6,DenseNet40,sigmadelta,128,1.5e-08,200000000.0,80.0,27.032,13840.4,2904390.0,158.844,72252.4,509957000.0
+DenseNet40_sigmadelta_sub128_To3e-08_fc100e6,DenseNet40,sigmadelta,128,3e-08,100000000.0,80.0,54.032,27664.4,2906820.0,158.175,36147.6,509957000.0
+DenseNet40_sigmadelta_sub128_To6e-08_fc50e6,DenseNet40,sigmadelta,128,6e-08,50000000.0,80.0,108.032,55312.4,2911670.0,156.854,18079.1,509957000.0
