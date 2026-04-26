@@ -37,6 +37,10 @@ In NeuroSim, **`SigmaDeltaModulator`** (`SigmaDeltaModulator.h` / `.cpp`) encaps
 - **Roles:** `OUTPUT_ENCODER` (readout stream after array) vs `INPUT_ENCODER` (row / WL side, when instantiated as `sigmaDeltaModulatorRow`).
 - **Knobs:** `naturalFreqFc` (\(f_c\)), `observationPeriodTo` (\(T_o\)), `cIntFemtoFarad`, `iRefNanoAmp`, plus `eascimSigmaDeltaVdd` on `Param` for switching-energy scaling.
 
+- **Area:** transistor strip (scaled from 65 nm reference) + MiM bank \(\propto C_{\mathrm{int}}\) via `eascimAreaMimPerFfM2` and `eascimAreaOverheadFactor`.
+- **Dynamic energy (output path):** per-column contribution combines **switching on \(C_{\mathrm{int}}\)** (\(\propto\) pulse count \(\approx f_c T_o\)) and **bias / \(I_{\mathrm{ref}}\)** over \(T_o\), scaled by `eascimEnergySwitchFactor`, `eascimEnergyBiasFactor`, column resistance shaping, and temperature.
+
+See `SigmaDeltaModulator::GetReadPathEnergy` / `GetInputPathEnergy` for the exact expressions.
 
 ## 2. Where it is implemented (code map)
 
@@ -107,6 +111,11 @@ When **`cimInterfaceMode == SIGMA_DELTA_STREAM`** and **`eascimAnalogPoolActivat
 - **`EASCIM_ANALOG_POOL_ACT`**: `0` = use digital max-pool / activation blocks under ΣΔ; `1` = use analog stream model (only meaningful when interface is ΣΔ).
 - **`EASCIM_ANALOG_E_PJ`**: optional override for energy per compare event (pJ); other β / stream factors live on `Param` (`eascimAnalogEnergyPerComparePJ`, `eascimAnalogCompAreaBeta`, `eascimAnalogStreamEnergyFactor` in `Param.h` / defaults in `Param.cpp`).
 
+
+## References
+- R. Sreekumar *et al.*, “EASI-CiM: Event-driven asynchronous stream-based image classifier with compute-in-memory kernels” *IEEE ISQED*, 2024.
+- R. Sreekumar *et al.*, “EAS-CiM 2.0: Event-driven Asynchronous Stream-based Compute-in-Memory Kernels with Scalable Precision,” *IEEE ISCAS*, 2025.
+- Original NeuroSim: P.-Y. Chen, X. Peng, S. Yu, Arizona State University (see file headers in `NeuroSIM/`).
 `main` prints **`analogPoolActivate`** under the ΣΔ banner so logs show which branch ran.
 
 ---
