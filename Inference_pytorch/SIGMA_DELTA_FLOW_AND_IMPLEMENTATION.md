@@ -97,13 +97,3 @@ When **`cimInterfaceMode == SIGMA_DELTA_STREAM`** and **`eascimAnalogPoolActivat
 
 ---
 
-## 8. Files worth keeping under version control
-
-- `NeuroSIM/Param.cpp` (mode + env overrides)
-- `NeuroSIM/SubArray.cpp`, `ProcessingUnit.cpp`, `Tile.cpp`, `Chip.cpp` (ΣΔ gating)
-- `NeuroSIM/AnalogStreamNonlinearity.cpp`, `AnalogStreamNonlinearity.h` (optional analog pool / activation PPA)
-- `Inference_pytorch/inference.py` (stable loader)
-- `Inference_pytorch/scripts/run_cs6501_project.sh`, `parse_project_results.py`, `make_overleaf_results.py`
-- Log bundles: `logrun2/sweep_*/` (or `project_results/*/`)
-
-This file: **`Inference_pytorch/SIGMA_DELTA_FLOW_AND_IMPLEMENTATION.md`**.
