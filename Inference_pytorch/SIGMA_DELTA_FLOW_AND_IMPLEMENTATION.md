@@ -56,7 +56,7 @@ Typical sweep grid (as used in project logs):
 
 - **`NS_CIM_INTERFACE_MODE`**: `0` baseline, `1` ΣΔ.
 - **`EASCIM_TO_S`**: observation window \(T_o\) (e.g. `1e-9`, `5e-9`, `1e-8`).
-- **`EASCIM_FC_HZ`**: carrier frequency \(f_c\) (e.g. `50e6`, `100e6`, `200e6`).
+- **`EASCIM_FC_HZ`**: natural frequency \(f_c\) of modulator (e.g. `50e6`, `100e6`, `200e6`).
 - **`EASCIM_SD_VDD_V`**: ΣΔ supply (e.g. `0.4`).
 - **`subArray` / `parallelRead`**: must satisfy `parallelRead == subArray` when `cellBit > 1` (multi-level cell constraint in `inference.py`).
 
