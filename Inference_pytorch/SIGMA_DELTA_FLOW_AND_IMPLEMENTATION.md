@@ -78,9 +78,9 @@ The deliverable is **`logrun2/sweep_<timestamp>/overleaf_results.tex`** plus **`
 
 ---
 
-## 6. Relation to the papers (intent)
+## 6. Relation to the papers
 
-The implementation is meant to reflect **stream-based, time-encoded readout** and **reduced reliance on conventional digital accumulation / buffering / activation** along the PE–tile–chip path, as discussed in the EAS-CiM / EASI-CiM proposal materials—not a cycle-accurate SPICE model of every transistor, but a **consistent architectural accounting** inside NeuroSim’s existing PPA framework.
+The implementation is meant to reflect **stream-based, time-encoded readout** and **reduced reliance on conventional digital accumulation / buffering / activation** along the PE–tile–chip path, as discussed in the EAS-CiM / EASI-CiM papers, not a cycle-accurate SPICE model of every transistor, but a **consistent architectural accounting** inside NeuroSim’s existing PPA framework.
 
 ---
 
