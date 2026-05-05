@@ -103,7 +103,7 @@ Typical sweep grid (as used in project logs):
 - `subArray` / `parallelRead` and DNN quantization knobs:
   - constrained by the wrapper logic (e.g., `parallelRead == subArray` when `cellBit > 1`).
 
-Results are aggregated with `parse_project_results.py` and exported for Overleaf with `make_overleaf_results.py`.
+Results are aggregated with `parse_project_results.py`.
 
 ---
 
