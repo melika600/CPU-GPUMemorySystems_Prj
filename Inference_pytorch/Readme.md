@@ -71,7 +71,6 @@ See `SigmaDeltaModulator::GetReadPathEnergy` / `SigmaDeltaModulator::GetInputPat
 | **Python → C++** | `Inference_pytorch/inference.py` (and hooks) | `--inference 1` triggers hooks → logs/traces → calls the NeuroSim C++ backend (`main`). |
 | **Sweeps / logs** | `Inference_pytorch/scripts/run_cs6501_project*.sh` | Runs baseline and ΣΔ grids using environment variables (`NS_CIM_INTERFACE_MODE`, `EASCIM_FC_HZ`, `EASCIM_TO_S`, etc.). |
 | **Summaries** | `Inference_pytorch/scripts/parse_project_results.py` | Parses per-run logs → `summary.csv` (accuracy, latency/clk, energy, TOPS/W, FPS, area). |
-| **Overleaf export** | `Inference_pytorch/scripts/make_overleaf_results.py` | Writes `overleaf_results.tex` (tables derived from `summary.csv`). |
 
 ---
 
