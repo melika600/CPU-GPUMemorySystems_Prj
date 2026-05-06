@@ -38,7 +38,7 @@ In NeuroSim, these blocks appear explicitly in layer/chip summaries (buffer late
 ### Sigma-delta stream path (this project)
 
 1. The **same physical read / CiM** still produces an analog quantity that must be **resolved in time**; we replace the **SAR ADC block** with a **ΣΔ modulator** model (`SigmaDeltaModulator`) when `cimInterfaceMode == SIGMA_DELTA_STREAM` (column/output-side).
-2. **Information is encoded in the time domain**: a 1-bit (stream) representation whose **time-average** tracks the analog value over a finite **observation window** \(T_o\), with a **natural stream frequency** \(f_c\) and analog parameters (e.g. \(C_\mathrm{int}\), \(I_\mathrm{ref}\), \(V_\mathrm{dd}\)) used for ΣΔ PPA.
+2. **Information is encoded in the time domain**: a 1-bit (stream) representation whose **time-average** tracks the analog value over a finite **observation window** \(T_o\), with a **natural stream frequency** \(f_c\) and analog parameters (e.g. \(C_int\), \(I_ref\), \(V_dd\)) used for ΣΔ PPA.
 3. **Periphery accounting / gating**: aligned with the EAS-CiM / EASI-CiM story, the ΣΔ mode primarily **accounts for the readout/interface cost** and **bypasses/gates off** most of the baseline digital post-processing hierarchy along the PE–tile–chip datapath (so buffer/accumulation/bus-style contributions are not counted as in the baseline first-order model).  
    **Max-pooling and chip-level activation** are handled separately: by default in ΣΔ mode they can use an **analog stream comparator** PPA model (`AnalogStreamNonlinearity`), controlled by `EASCIM_ANALOG_POOL_ACT`. Setting `EASCIM_ANALOG_POOL_ACT=0` falls back to the original digital `MaxPooling` / activation PPA instead.
 
@@ -52,7 +52,7 @@ A simplified first-order loop contains:
 
 1. **Integrator** on capacitor \(C_int\) driven by the difference between input current and feedback current switched by the 1-bit quantizer output.
 2. **Comparator / hysteresis** stage (in the paper: DLS inverter) deciding when the integrator crosses a threshold band.
-3. **1-bit DAC / feedback** injecting feedback proportional to \(\pm I_{\mathrm{ref}}\) (or equivalent) back onto the integrator node.
+3. **1-bit DAC / feedback** injecting feedback proportional to \(I_ref\) (or equivalent) back onto the integrator node.
 
 Over a finite **observation window** \(T_o\), the stream’s **average duty cycle** relates to the normalized input (paper Eqs. (1)–(2) in the EAS-CiM 2.0 manuscript). A higher internal clocking rate \(f_c\) produces more effective stream transitions within \(T_o\), improving effective resolution at the cost of higher switching activity (dynamic energy).
 
@@ -64,11 +64,11 @@ In this fork, `SigmaDeltaModulator` (`SigmaDeltaModulator.h` / `.cpp`) encapsula
 - **Knobs (from `Param`)**
   - `eascimNaturalFreqFc` (\(f_c\)),
   - `eascimObservationPeriodTo` (\(T_o\)),
-  - `eascimCintFemtoFarad` (\(C_\mathrm{int}\)),
-  - `eascimIrefNanoAmp` (\(I_\mathrm{ref}\)),
-  - `eascimSigmaDeltaVdd` (\(V_\mathrm{dd}\)) for ΣΔ switching-energy scaling.
+  - `eascimCintFemtoFarad` (\(C_int\)),
+  - `eascimIrefNanoAmp` (\(I_ref\)),
+  - `eascimSigmaDeltaVdd` (\(V_dd\)) for ΣΔ switching-energy scaling.
 - **Area**
-  - transistor budget (scaled from a 65 nm reference feature size in code comments) + MiM capacitor area scaling with \(C_\mathrm{int}\) using:
+  - transistor budget (scaled from a 65 nm reference feature size in code comments) + MiM capacitor area scaling with \(C_int\) using:
     - `eascimAreaMimPerFfM2`
     - `eascimAreaOverheadFactor`
 - **Dynamic energy / power**
@@ -137,9 +137,9 @@ However, NeuroSim remains an **architectural PPA estimator**, not a cycle-accura
 1. The code exposes paper-aligned architectural knobs:
    - observation window \(T_o\) (`eascimObservationPeriodTo`),
    - natural stream frequency \(f_c\) (`eascimNaturalFreqFc`),
-   - integration capacitor \(C_\mathrm{int}\) (`eascimCintFemtoFarad`),
-   - feedback reference current \(I_\mathrm{ref}\) (`eascimIrefNanoAmp`),
-   - ΣΔ analog supply \(V_\mathrm{dd}\) (`eascimSigmaDeltaVdd`).
+   - integration capacitor \(C_int\) (`eascimCintFemtoFarad`),
+   - feedback reference current \(I_ref\) (`eascimIrefNanoAmp`),
+   - ΣΔ analog supply \(V_dd\) (`eascimSigmaDeltaVdd`).
 2. Energy/latency are computed using first-order algebraic expressions inside `SigmaDeltaModulator` and (optionally) inside `AnalogStreamNonlinearity`. These are used for **consistent architectural accounting** inside NeuroSim’s existing PPA framework.
 3. In ΣΔ mode, the simulator uses a **clock-decoupling assumption** for FPS/TOPS in this fork:
    - the “global clock period” is derived from a synchronous-equivalent latency that does not fully stretch with the output ΣΔ observation window.
