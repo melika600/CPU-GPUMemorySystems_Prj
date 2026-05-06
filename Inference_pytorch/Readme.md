@@ -2,6 +2,27 @@
 
 This document describes how **stream-based ΣΔ** activation I/O is modeled in this NeuroSim fork, how it differs from the **baseline SAR-ADC** path, and where the code lives.
 
+
+## Inference_pytorch repository layout (this fork)
+
+This repo includes an `Inference_pytorch/` folder that contains the PyTorch wrapper plus this fork’s **Sigma-Delta (ΣΔ) stream CiM** extensions and experiment artifacts.
+
+- **`Inference_pytorch/finallog/`**: Results for baseline vs ΣΔ experiments with VGG8 and the sweeps of fc (e.g. `master.log`, per-run `logs/*.log`, `summary.csv`).
+- **`Inference_pytorch/finallog2/`**: Results for baseline vs ΣΔ experiments with DenseNet40 and the sweeps of fc (same structure as `finallog/`).
+- **`Inference_pytorch/finallog_npulses/`**: Results for ΣΔ experiments with VGG8 that sweep an **effective pulse count** \(N\) (you’ll see `..._N{1,3,5,10,20}_...` in filenames).
+- **`Inference_pytorch/log/`**: Runtime artifacts and model checkpoints used by the wrapper (e.g. `VGG8.pth`, `DenseNet40.pth`) plus any default log outputs that aren’t part of the curated `finallog*` bundles.
+- **`Inference_pytorch/logrun/`**: Small, tracked benchmark/reference log(s) used for quick comparisons (the rest of run logs are typically ignored by `.gitignore`).
+- **`Inference_pytorch/models/`**: PyTorch model definitions (e.g. VGG / ResNet / DenseNet) and dataset helpers.
+- **`Inference_pytorch/modules/`**: Quantization / inference helper modules used by the wrapper.
+- **`Inference_pytorch/NeuroSIM/`**: C++ NeuroSim source used by the wrapper (compile with `make`). This fork includes the ΣΔ interface model (`SigmaDeltaModulator.*`) and optional analog stream pool/activation PPA (`AnalogStreamNonlinearity.*`) which are our contributions.
+- **`Inference_pytorch/scripts/`**: Experiment scripts and post-processing:
+  - `run_cs6501_project.sh`: example sweep runner (baseline + ΣΔ via env vars)
+  - `parse_project_results.py`: parse logs → `summary.csv`
+- **`Inference_pytorch/utee/`**: Utility code used by training/inference (including hooks that export layer traces for NeuroSim).
+- **`Inference_pytorch/inference.py`**: Main PyTorch entrypoint for inference + NeuroSim hardware evaluation (`--inference 1` enables trace export + C++ backend run).
+
+For the detailed ΣΔ stream flow/implementation notes, read the rest of the Readme:
+  
 ---
 
 ## 1. Conceptual flow (what we model)
