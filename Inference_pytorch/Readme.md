@@ -50,7 +50,7 @@ So: **ΣΔ = swap readout interface + bypass most modeled digital post-processin
 
 A simplified first-order loop contains:
 
-1. **Integrator** on capacitor \(C_{\mathrm{int}}\) driven by the difference between input current and feedback current switched by the 1-bit quantizer output.
+1. **Integrator** on capacitor \(C_int\) driven by the difference between input current and feedback current switched by the 1-bit quantizer output.
 2. **Comparator / hysteresis** stage (in the paper: DLS inverter) deciding when the integrator crosses a threshold band.
 3. **1-bit DAC / feedback** injecting feedback proportional to \(\pm I_{\mathrm{ref}}\) (or equivalent) back onto the integrator node.
 
