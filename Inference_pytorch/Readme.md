@@ -52,7 +52,7 @@ A simplified first-order loop contains:
 
 1. **Integrator** on capacitor \(C_int\) driven by the difference between input current and feedback current switched by the 1-bit quantizer output.
 2. **Comparator / hysteresis** stage (in the paper: DLS inverter) deciding when the integrator crosses a threshold band.
-3. **1-bit DAC / feedback** injecting feedback proportional to \(I_ref\) (or equivalent) back onto the integrator node.
+3. **1-bit DAC / feedback** injecting feedback proportional to \mp \(I_ref\) (or equivalent) back onto the integrator node.
 
 Over a finite **observation window** \(T_o\), the stream’s **average duty cycle** relates to the normalized input (paper Eqs. (1)–(2) in the EAS-CiM 2.0 manuscript). A higher internal clocking rate \(f_c\) produces more effective stream transitions within \(T_o\), improving effective resolution at the cost of higher switching activity (dynamic energy).
 
